@@ -258,7 +258,7 @@ class SemanticSimilarityJudge(StochasticJudge):
     ) -> None:
         self.model_name = model_name
         self.threshold = threshold
-        self._model = None  # Lazy load to avoid import cost at startup
+        self._model: SentenceTransformer | None = None # Lazy load to avoid import cost at startup
 
     def _get_model(self) -> SentenceTransformer:
         if self._model is None:
