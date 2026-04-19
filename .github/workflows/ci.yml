@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package and dev dependencies
+        run: |
+          pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: ruff check evalkit/ tests/ examples/
+
+      - name: Check formatting with ruff
+        run: ruff format --check evalkit/ tests/ examples/
+
+      - name: Type check with mypy
+        run: mypy evalkit/
+
+      - name: Run tests with coverage
+        run: pytest --cov=evalkit --cov-report=xml --cov-report=term-missing -v -m "not slow"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: matrix.python-version == '3.11'
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+  example:
+    name: Run full workflow example
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: Run full workflow (no API keys required)
+        run: python examples/full_workflow.py
+
+  package:
+    name: Verify package builds
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install build
+      - run: python -m build --wheel
+      - run: pip install dist/*.whl
+      - name: Smoke test installed package
+        run: |
+          python -c "
+          import evalkit
+          print(evalkit.__version__)
+          # Verify core public API is importable from installed wheel
+          from evalkit import (
+              PowerAnalysis, Experiment, EvalDataset, PromptTemplate,
+              MockRunner, ExactMatchJudge, Accuracy, RigorChecker,
+              McNemarTest, BHCorrection, CohenKappa,
+          )
+          print("All core imports OK")
+          "

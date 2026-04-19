@@ -1,0 +1,26 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      # Results, reports, and checkpoints are written to ./results/ inside the container
+      - ./results:/app/results
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Run the full workflow example (no API keys required)
+  # Usage: docker compose --profile example up example
+  example:
+    build: .
+    command: python examples/full_workflow.py
+    profiles:
+      - example

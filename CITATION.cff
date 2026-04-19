@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+message: "If you use evalkit in your research, please cite it as below."
+type: software
+title: "evalkit: Rigorous LLM Evaluation"
+abstract: >
+  evalkit is a Python library for statistically rigorous evaluation of large
+  language models. It provides bootstrap confidence intervals on every metric,
+  McNemar's test and Wilcoxon signed-rank test for model comparison,
+  Benjamini-Hochberg FDR correction for multiple prompt variants, power
+  analysis before running experiments, and an automated RigorChecker audit
+  that flags underpowered experiments, class imbalance, and unreliable judges.
+authors:
+  - family-names: "McConnell"
+    given-names: "Bonnie"
+version: 0.1.0
+date-released: "2026-04-01"
+license: MIT
+repository-code: "https://github.com/bonnie-mcconnell/evalkit"
+keywords:
+  - llm-evaluation
+  - statistical-testing
+  - bootstrap
+  - nlp
+  - machine-learning
+references:
+  - type: article
+    title: "Controlling the False Discovery Rate: A Practical and Powerful Approach to Multiple Testing"
+    authors:
+      - family-names: Benjamini
+        given-names: Yoav
+      - family-names: Hochberg
+        given-names: Yosef
+    journal: "Journal of the Royal Statistical Society: Series B"
+    year: 1995
+    volume: 57
+    issue: 1
+    pages: "289-300"
+  - type: article
+    title: "Note on the Sampling Error of the Difference Between Correlated Proportions or Percentages"
+    authors:
+      - family-names: McNemar
+        given-names: Quinn
+    journal: Psychometrika
+    year: 1947
+    volume: 12
+    pages: "153-157"
