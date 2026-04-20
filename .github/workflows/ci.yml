@@ -76,14 +76,13 @@ jobs:
       - run: pip install dist/*.whl
       - name: Smoke test installed package
         run: |
-          python -c "
+          python -c '
           import evalkit
           print(evalkit.__version__)
-          # Verify core public API is importable from installed wheel
           from evalkit import (
               PowerAnalysis, Experiment, EvalDataset, PromptTemplate,
               MockRunner, ExactMatchJudge, Accuracy, RigorChecker,
               McNemarTest, BHCorrection, CohenKappa,
           )
           print("All core imports OK")
-          "
+          '
