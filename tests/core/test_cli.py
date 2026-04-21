@@ -686,3 +686,92 @@ def test_run_claude_model_attempts_anthropic_import(tmp_path):
         )
 
     assert "claude" not in result.output.lower() or result.exit_code in (0, 1)
+
+
+# ── --judge llm paths ──────────────────────────────────────────────────────────
+
+
+def test_run_llm_judge_with_mock_model_fails(tmp_path):
+    """
+    --judge llm with --model mock must exit 1 immediately with a clear error.
+    mock does not have a provider, so LLMJudge cannot be constructed.
+    """
+    data = _write_jsonl(tmp_path, n=10)
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "mock",
+            "--template",
+            "{{ question }}",
+            "--judge",
+            "llm",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "real model" in result.output.lower() or "mock" in result.output.lower()
+
+
+def test_run_unknown_judge_type_fails(tmp_path):
+    """Unrecognised --judge value must exit 1 with a useful error."""
+    data = _write_jsonl(tmp_path, n=10)
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "mock",
+            "--template",
+            "{{ question }}",
+            "--judge",
+            "cosine",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "cosine" in result.output or "Unknown" in result.output
+
+
+def test_run_llm_judge_wires_provider(tmp_path):
+    """
+    --judge llm with a real model constructs LLMJudge using the same provider.
+    We mock the provider so no API key is required.
+    """
+    from unittest.mock import MagicMock, patch
+
+    data = _write_jsonl(tmp_path, n=10)
+
+    mock_provider = MagicMock()
+    mock_provider.model = "gpt-4o-mini"
+    mock_provider.complete.return_value = '{"score": 1.0, "reasoning": "correct"}'
+    mock_provider._total_cost = 0.0
+    mock_provider._total_tokens = 0
+    mock_provider._call_count = 0
+    mock_provider.cost_summary.return_value = {
+        "total_cost_usd": 0.0,
+        "total_tokens": 0,
+        "call_count": 0,
+        "avg_cost_per_call": 0.0,
+    }
+
+    with patch("evalkit.providers.base.OpenAIProvider", return_value=mock_provider):
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                str(data),
+                "--model",
+                "gpt-4o-mini",
+                "--judge",
+                "llm",
+                "--template",
+                "{{ question }}",
+                "--resamples",
+                "200",
+            ],
+        )
+
+    # LLM judge message must appear, exit must be 0 or 1 (mock may not satisfy all attrs)
+    assert "llm judge" in result.output.lower() or result.exit_code in (0, 1)

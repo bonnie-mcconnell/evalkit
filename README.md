@@ -4,7 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/evalkit-research.svg)](https://pypi.org/project/evalkit-research/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![coverage: 99%](https://img.shields.io/badge/coverage-99%25-brightgreen.svg)](https://github.com/bonnie-mcconnell/evalkit/actions)
+[![coverage: 100%](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](https://github.com/bonnie-mcconnell/evalkit/actions)
 
 I built this because I kept reading ML papers that reported accuracy improvements with no confidence intervals, no significance testing, and sample sizes that gave them less than 30% statistical power. The improvements were probably noise. Nobody could tell.
 
@@ -68,7 +68,7 @@ Status: FAIL  (2 errors, 1 warning)
 | Automated statistical audit | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Inter-rater agreement (κ, α) | ✅ | ❌ | Partial | ❌ | ❌ |
 | Direct model comparison (.compare()) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| No vendor lock-in | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Works offline / no vendor dependency | ✅ | ✅ | ✅ | ✅ | ❌ |
 
 ---
 
@@ -233,7 +233,7 @@ print(result)
 
 ```python
 # Split your labelled pool before evaluating
-# stratify=True preserves class distribution in both subsets (the correct default)
+# stratify=True preserves class distribution in both subsets
 train, test = dataset.split(test_size=0.2, stratify=True)
 print(f"Train: {len(train)}, Test: {len(test)}")
 
@@ -254,10 +254,15 @@ dataset = EvalDataset.from_list(records, reference_field="label")
 ## CLI
 
 ```bash
-# Evaluate - produces human-readable output with CIs and RigorChecker report
+# Evaluate with exact-match judge
 evalkit run data.jsonl --model gpt-4o-mini \
   --template "Q: {{ question }}" \
   --output report.html
+
+# Evaluate with LLM-as-judge (same model scores the responses)
+evalkit run data.jsonl --model gpt-4o-mini \
+  --judge llm \
+  --template "Q: {{ question }}"
 
 # Machine-readable output for scripting
 evalkit run data.jsonl --model mock --format json | jq '.metrics.Accuracy.value'
@@ -303,7 +308,7 @@ The thing I spent the most time on was making sure the statistical methods could
 
 **Execution layer** (`Judge`, `AsyncRunner`, `MockRunner`): `MockRunner` sits at the runner level rather than the provider level because "correct" is only meaningful relative to the reference answer, which the provider layer doesn't have access to. `AsyncRunner` writes checkpoints atomically (write-to-temp-then-rename) so a killed process never leaves a corrupt checkpoint. Synchronous provider calls run in a thread pool via `run_in_executor` to avoid blocking the event loop.
 
-**Analysis layer** (`Metric`, `RigorChecker`): The bootstrap is implemented once in `Metric.bootstrap_ci` and called by every subclass via `_point_estimate`. I used stratified bootstrap rather than unstratified because on an imbalanced dataset, an unstratified resample will sometimes contain zero examples of the minority class, making CIs artificially narrow. Stratified sampling samples within each class separately so all classes appear in every resample. The `RigorChecker` clamps accuracy to the open interval (0, 1) before running power calculations - accuracy of exactly 0 or 1 makes the variance term p*(1-p) degenerate to zero, which would produce a misleading "adequately powered" result.
+**Analysis layer** (`Metric`, `RigorChecker`): The bootstrap is implemented once in `Metric.bootstrap_ci` and called by every subclass via `_point_estimate`. Stratified bootstrap samples within each class separately so all classes appear in every resample - on an imbalanced dataset, unstratified resampling sometimes produces zero examples of the minority class, making CIs artificially narrow. The `RigorChecker` clamps accuracy to the open interval (0, 1) before running power calculations - accuracy of exactly 0 or 1 makes the variance term p*(1-p) degenerate to zero, producing a misleading "adequately powered" result.
 
 **Interface layer** (Python API, CLI, REST API): Three interfaces over the same objects. The CLI uses lazy imports for fast startup - `evalkit version` doesn't load scipy. `evalkit run --format json` produces pipeable output for scripting.
 

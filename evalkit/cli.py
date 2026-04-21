@@ -5,6 +5,7 @@ Commands:
   evalkit run      - run an evaluation from a JSONL dataset
   evalkit compare  - compare two run result files (McNemar or Wilcoxon)
   evalkit power    - compute sample size requirements before running
+  evalkit table    - print a sample size planning grid
   evalkit version  - print version info
 
 Design note: the CLI is a thin wrapper around the Python API, not a parallel
@@ -56,7 +57,12 @@ def run(
     reference_field: str = typer.Option(
         "label", "--ref-field", help="Dataset field containing ground truth."
     ),  # noqa: E501
-    judge: str = typer.Option("exact", "--judge", "-j", help="Judge type: exact, regex, llm."),
+    judge: str = typer.Option(
+        "exact",
+        "--judge",
+        "-j",
+        help="Judge type: exact, regex, or llm. llm requires a real --model (gpt-* or claude-*).",
+    ),
     regex_pattern: str | None = typer.Option(
         None, "--regex", help="Regex pattern for regex judge."
     ),  # noqa: E501
@@ -80,14 +86,15 @@ def run(
     """
     Run an evaluation on a JSONL dataset and produce a tearsheet with CIs.
 
-    Example:
-      evalkit run data.jsonl --model mock --template "Q: {{ question }}" --judge exact
+    Examples:
+      evalkit run data.jsonl --model mock --template "Q: {{ question }}"
+      evalkit run data.jsonl --model gpt-4o-mini --judge llm --template "Q: {{ question }}"
       evalkit run data.jsonl --model gpt-4o-mini --format json | jq .metrics.Accuracy.value
     """
     from evalkit.analysis.report import ReportGenerator
     from evalkit.core.dataset import EvalDataset, PromptTemplate
     from evalkit.core.experiment import Experiment
-    from evalkit.core.judge import ExactMatchJudge, RegexMatchJudge
+    from evalkit.core.judge import ExactMatchJudge, LLMJudge, RegexMatchJudge
     from evalkit.core.runner import AsyncRunner, MockRunner
 
     if format not in ("text", "json"):
@@ -104,8 +111,9 @@ def run(
 
     console.print(f"[green]✓[/green] Loaded {len(ds)} examples from [bold]{ds.name}[/bold]")
 
-    # Build judge
-    judge_obj: ExactMatchJudge | RegexMatchJudge
+    # Build judge. For --judge llm the judge object is replaced after the
+    # provider is constructed (we need the provider reference). Use a sentinel.
+    judge_obj: ExactMatchJudge | RegexMatchJudge | LLMJudge
     if judge == "exact":
         judge_obj = ExactMatchJudge()
     elif judge == "regex":
@@ -113,11 +121,27 @@ def run(
             console.print("[red]--regex is required when --judge=regex[/red]")
             raise typer.Exit(1)
         judge_obj = RegexMatchJudge(pattern=regex_pattern)
+    elif judge == "llm":
+        if model == "mock":
+            console.print(
+                "[red]--judge llm requires a real model (gpt-* or claude-*), not mock.[/red]"
+            )
+            raise typer.Exit(1)
+        judge_obj = ExactMatchJudge()  # placeholder - replaced below once provider is built
     else:
-        console.print(f"[red]Unknown judge type '{judge}'. Use: exact, regex[/red]")
+        console.print(f"[red]Unknown judge type '{judge}'. Use: exact, regex, llm[/red]")
         raise typer.Exit(1)
 
     prompt_template = PromptTemplate(template)
+
+    # Validate template against the dataset before constructing any provider.
+    # Catches field-name typos at zero cost - before any API keys are used.
+    prompt_errors = prompt_template.validate(ds)
+    if prompt_errors:
+        console.print("[red bold]Template validation failed - fix before running:[/red bold]")
+        for err in prompt_errors:
+            console.print(f"  [red]{err}[/red]")
+        raise typer.Exit(1)
 
     # Build runner
     from evalkit.providers.base import ModelProvider
@@ -159,14 +183,19 @@ def run(
         )  # noqa: E501
         raise typer.Exit(1)
 
-    # Validate template against dataset before constructing any providers.
-    # Catches field-name typos at zero cost - before API keys are used.
-    prompt_errors = prompt_template.validate(ds)
-    if prompt_errors:
-        console.print("[red bold]Template validation failed - fix before running:[/red bold]")
-        for err in prompt_errors:
-            console.print(f"  [red]{err}[/red]")
-        raise typer.Exit(1)
+    # Now that we have a provider, wire up the LLM judge if requested.
+    if judge == "llm":
+        judge_obj = LLMJudge(provider=provider)
+        runner = AsyncRunner(
+            provider=provider,
+            judge=judge_obj,
+            template=prompt_template,
+            concurrency=concurrency,
+            checkpoint_dir=checkpoint_dir,
+        )
+        console.print(
+            "[cyan]LLM judge active. Validate inter-rater agreement before reporting scores.[/cyan]"
+        )
 
     # Run experiment
     experiment = Experiment(
