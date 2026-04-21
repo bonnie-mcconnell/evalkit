@@ -44,3 +44,10 @@ Thumbs.db
 
 # ruff
 .ruff_cache/
+
+# Local scratch files from manual testing (not part of the library)
+test_data*.jsonl
+test_api.py
+test_dataset.py
+test_checkpoint.py
+report.html

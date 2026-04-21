@@ -113,3 +113,21 @@ def test_html_template_tokens_not_double_substituted():
     # (html.escape doesn't change {, }, or spaces)
     header_section = html[html.find("<header>") : html.find("</header>")]
     assert "{{ model }}" in header_section or "&#123;" in header_section
+
+
+def test_html_contains_no_python_linter_comments(experiment_result):
+    """Python linter suppression comments must never appear in generated HTML.
+
+    The HTML template lives inside a triple-quoted Python string. Any
+    # noqa: E501 comments appended to long lines inside that string get
+    written verbatim into every report and render as visible text.
+
+    The pyproject.toml per-file-ignores already suppresses E501 for
+    report.py, so noqa comments are neither needed nor acceptable there.
+    """
+    html = ReportGenerator().generate(experiment_result)
+    assert "# noqa" not in html, (
+        "Python linter comment '# noqa' leaked into HTML output. "
+        "Check report.py for noqa comments inside the template string."
+    )
+    assert "# type:" not in html, "Python type comment '# type:' leaked into HTML output."
