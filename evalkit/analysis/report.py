@@ -60,14 +60,14 @@ _REPORT_TEMPLATE = """<!DOCTYPE html>
   header { border-bottom: 1px solid var(--border); padding-bottom: 1.5rem; margin-bottom: 2rem; }
   header h1 { font-size: 1.6rem; font-weight: 700; color: var(--accent); letter-spacing: -0.02em; }
   header .meta { color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }  # noqa: E501
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }  # noqa: E501
-  .card .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }  # noqa: E501
-  .card .value { font-size: 1.8rem; font-weight: 700; font-family: var(--mono); margin-top: 0.25rem; }  # noqa: E501
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
+  .card .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .card .value { font-size: 1.8rem; font-weight: 700; font-family: var(--mono); margin-top: 0.25rem; }
   .card .ci { font-size: 0.8rem; color: var(--muted); font-family: var(--mono); }
   .card .value.accent { color: var(--accent); }
   .section { margin-bottom: 2rem; }
-  .section h2 { font-size: 1rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;  # noqa: E501
+  .section h2 { font-size: 1rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
                 color: var(--muted); margin-bottom: 1rem; border-bottom: 1px solid var(--border);
                 padding-bottom: 0.5rem; }
   table { width: 100%; border-collapse: collapse; }
@@ -76,7 +76,7 @@ _REPORT_TEMPLATE = """<!DOCTYPE html>
   td { padding: 0.75rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.04);
        font-family: var(--mono); font-size: 0.85rem; }
   tr:hover td { background: rgba(255,255,255,0.02); }
-  .finding { padding: 0.85rem 1rem; border-radius: 6px; margin-bottom: 0.5rem; font-size: 0.875rem; }  # noqa: E501
+  .finding { padding: 0.85rem 1rem; border-radius: 6px; margin-bottom: 0.5rem; font-size: 0.875rem; }
   .finding.error { background: rgba(239,68,68,0.1); border-left: 3px solid var(--error); }
   .finding.warning { background: rgba(245,158,11,0.1); border-left: 3px solid var(--warn); }
   .finding.info { background: rgba(0,212,170,0.08); border-left: 3px solid var(--accent); }
@@ -87,9 +87,9 @@ _REPORT_TEMPLATE = """<!DOCTYPE html>
   .badge.pass { background: rgba(34,197,94,0.15); color: var(--ok); }
   .badge.fail { background: rgba(239,68,68,0.15); color: var(--error); }
   .ci-bar-wrap { display: flex; align-items: center; gap: 0.5rem; }
-  .ci-bar { height: 6px; background: var(--border); border-radius: 3px; flex: 1; position: relative; min-width: 80px; }  # noqa: E501
-  .ci-bar .fill { position: absolute; height: 100%; background: var(--accent2); border-radius: 3px; }  # noqa: E501
-  .ci-bar .point { position: absolute; width: 2px; height: 10px; top: -2px; background: var(--accent); border-radius: 1px; }  # noqa: E501
+  .ci-bar { height: 6px; background: var(--border); border-radius: 3px; flex: 1; position: relative; min-width: 80px; }
+  .ci-bar .fill { position: absolute; height: 100%; background: var(--accent2); border-radius: 3px; }
+  .ci-bar .point { position: absolute; width: 2px; height: 10px; top: -2px; background: var(--accent); border-radius: 1px; }
   footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border);
            color: var(--muted); font-size: 0.8rem; text-align: center; }
 </style>
@@ -98,7 +98,7 @@ _REPORT_TEMPLATE = """<!DOCTYPE html>
 <div class="container">
   <header>
     <h1>evalkit - {{ experiment_name }}</h1>
-    <div class="meta">Generated {{ generated_at }} · Model: {{ model }} · Dataset: {{ dataset_name }} (n={{ n }})</div>  # noqa: E501
+    <div class="meta">Generated {{ generated_at }} · Model: {{ model }} · Dataset: {{ dataset_name }} (n={{ n }})</div>
   </header>
 
   <div class="grid">
@@ -118,13 +118,13 @@ _REPORT_TEMPLATE = """<!DOCTYPE html>
   <div class="section">
     <h2>Metrics with 95% Confidence Intervals</h2>
     <table>
-      <thead><tr><th>Metric</th><th>Value</th><th>95% CI</th><th>n</th><th>Interval</th></tr></thead>  # noqa: E501
+      <thead><tr><th>Metric</th><th>Value</th><th>95% CI</th><th>n</th><th>Interval</th></tr></thead>
       <tbody>{{ metric_rows }}</tbody>
     </table>
   </div>
 
   <div class="section">
-    <h2>RigorChecker Audit <span class="badge {{ rigor_badge_class }}">{{ rigor_badge_text }}</span></h2>  # noqa: E501
+    <h2>RigorChecker Audit <span class="badge {{ rigor_badge_class }}">{{ rigor_badge_text }}</span></h2>
     {{ findings_html }}
   </div>
 
@@ -136,7 +136,7 @@ _REPORT_TEMPLATE = """<!DOCTYPE html>
     </table>
   </div>
 </div>
-<footer>evalkit-research · Rigorous LLM evaluation · <a href="https://github.com/bonnie-mcconnell/evalkit" style="color:var(--accent)">github</a></footer>  # noqa: E501
+<footer>evalkit-research · Rigorous LLM evaluation · <a href="https://github.com/bonnie-mcconnell/evalkit" style="color:var(--accent)">github</a></footer>
 </body>
 </html>"""
 
@@ -233,10 +233,10 @@ class ReportGenerator:
             bar = (
                 f'<div class="ci-bar-wrap">'
                 f'<div class="ci-bar">'
-                f'<div class="fill" style="left:{m.ci_lower * 100:.1f}%;width:{width_pct:.1f}%"></div>'  # noqa: E501
+                f'<div class="fill" style="left:{m.ci_lower * 100:.1f}%;width:{width_pct:.1f}%"></div>'
                 f'<div class="point" style="left:{point_pct:.1f}%"></div>'
                 f"</div>"
-                f'<span style="font-size:0.75rem;color:var(--muted)">±{m.margin_of_error:.4f}</span>'  # noqa: E501
+                f'<span style="font-size:0.75rem;color:var(--muted)">±{m.margin_of_error:.4f}</span>'
                 f"</div>"
             )
             rows.append(
@@ -252,7 +252,7 @@ class ReportGenerator:
 
     def _findings_html(self, audit: AuditReport) -> str:
         if not audit.findings:
-            return '<p style="color:var(--ok)">✅ No issues found. Experiment appears statistically sound.</p>'  # noqa: E501
+            return '<p style="color:var(--ok)">✅ No issues found. Experiment appears statistically sound.</p>'
 
         parts = []
         for f in sorted(audit.findings, key=_severity_sort_key):
