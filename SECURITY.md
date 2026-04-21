@@ -10,7 +10,7 @@
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Please report security issues by emailing **security@bonnie-mcconnell.dev** with:
+Please report security issues by emailing **bonniep.mcconnell@gmail.com** with:
 
 - A description of the vulnerability
 - Steps to reproduce it

@@ -9,7 +9,7 @@ description = "Rigorous LLM evaluation: bootstrap CIs, significance testing, and
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-authors = [{ name = "Bonnie McConnell", email = "bonnie.mcconnell@proton.me" }]
+authors = [{ name = "Bonnie McConnell", email = "bonniep.mcconnell@gmail.com" }]
 keywords = ["llm", "evaluation", "statistics", "nlp", "benchmark"]
 classifiers = [
     "Development Status :: 4 - Beta",
