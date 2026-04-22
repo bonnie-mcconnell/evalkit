@@ -4,7 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/evalkit-research.svg)](https://pypi.org/project/evalkit-research/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![coverage: 100%](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](https://github.com/bonnie-mcconnell/evalkit/actions)
+[![codecov](https://codecov.io/gh/bonnie-mcconnell/evalkit/branch/main/graph/badge.svg)](https://codecov.io/gh/bonnie-mcconnell/evalkit)
 
 [![Open in Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/bonnie-mcconnell/evalkit/main?filepath=examples/walkthrough.ipynb)
 
