@@ -347,11 +347,29 @@ class Experiment:
     runner:
         AsyncRunner or MockRunner that will call the model.
     additional_metrics:
-        Extra Metric instances to compute beyond the default (Accuracy).
-        Each metric's `_point_estimate` is called on the binary correctness
-        array, so they should accept 0/1 inputs (e.g. BalancedAccuracy, F1Score).
-        For metrics that need raw text outputs (BLEU, ROUGE) or label arrays,
-        compute them directly from `result.run_result` after calling .run().
+        Extra Metric instances to compute alongside Accuracy. Each metric
+        receives the binary correct/incorrect array (0 or 1) as both
+        predictions and references, so they must accept binary 0/1 inputs.
+
+        For class-level metrics (BalancedAccuracy, F1Score) or generation
+        metrics (BLEU, ROUGE), compute them directly from the RunResult
+        after calling .run()::
+
+            result = Experiment("my_eval", dataset, runner).run()
+
+            # Class-level metrics need actual outputs and labels
+            from evalkit import BalancedAccuracy
+            bal = BalancedAccuracy().compute(
+                result.run_result.outputs,
+                result.run_result.references,
+            )
+
+            # Generation metrics need raw text outputs
+            from evalkit import BLEUScore
+            bleu = BLEUScore().compute(
+                result.run_result.outputs,
+                result.run_result.references,
+            )
     rigour_checker:
         RigorChecker instance. Customise thresholds here if needed.
     n_variants:
@@ -430,15 +448,20 @@ class Experiment:
 
     def _compute_metrics(self, run_result: RunResult) -> dict[str, MetricResult]:
         """
-        Compute accuracy on the binary correct/incorrect outcomes.
+        Compute accuracy and any additional metrics on the run results.
 
         The default metric is Accuracy - the fraction of examples the judge
         scored as correct, with a stratified bootstrap CI.
 
-        F1, precision, recall, and generation metrics (BLEU/ROUGE) require
-        the underlying label array or raw text outputs, not just correctness
-        flags. Compute them from run_result directly and add to the returned
-        dict if needed, or pass pre-built Metric instances via additional_metrics.
+        Additional metrics receive the binary correct/incorrect array as both
+        predictions and references, which is correct for classification metrics
+        like BalancedAccuracy and F1Score on binary outcomes. For metrics that
+        need the raw text outputs or multi-class label arrays, compute them
+        directly from run_result after calling .run():
+
+            result = Experiment(...).run()
+            bleu = BLEUScore().compute(result.run_result.outputs,
+                                       result.run_result.references)
         """
         metrics: dict[str, MetricResult] = {}
         correct = run_result.correct  # list[int], 1 or 0

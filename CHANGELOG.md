@@ -13,21 +13,22 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `evalkit run --judge llm` - LLM-as-judge from the CLI. Uses the same provider
   as `--model`, so `evalkit run data.jsonl --model gpt-4o-mini --judge llm` runs
-  the evaluation and scores each response with the same model. A reminder to
-  validate inter-rater agreement prints automatically.
+  the evaluation and scores each response with the same model. Prints a reminder
+  to validate inter-rater agreement.
 
 ### Fixed
 
 - `SemanticSimilarityJudge._model` annotated as `SentenceTransformer | None` -
   fixes a mypy strict error on Python 3.12 where the inferred type was `None`.
 - `# noqa: E501` comments removed from the HTML template string in `report.py`.
-  These Python linter suppression comments were being written verbatim into every
-  generated HTML report and rendered as visible text. The `pyproject.toml`
-  per-file-ignores already suppresses E501 for `report.py` so the comments
-  were never needed. A regression test now prevents this from recurring.
-- `SECURITY.md` corrected contact email to `bonniep.mcconnell@gmail.com`.
-- `.gitignore` extended to cover local scratch test files (`test_data.jsonl`,
-  `test_api.py`, `test_dataset.py`, `test_checkpoint.py`, `report.html`).
+  These linter suppression comments were written verbatim into every generated
+  HTML report and rendered as visible text. A regression test now prevents this
+  from recurring.
+- `Experiment.additional_metrics` docstring corrected: class-level metrics
+  (BalancedAccuracy, F1Score) and generation metrics (BLEU, ROUGE) should be
+  computed from `result.run_result.outputs` and `result.run_result.references`
+  after `.run()`, not via `additional_metrics` which only receives binary arrays.
+- `.gitignore` extended to cover local scratch test files.
 
 ---
 
