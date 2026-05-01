@@ -382,7 +382,7 @@ This runs the complete pipeline - power analysis, evaluation, model comparison, 
 
 ## What I'd do differently
 
-The `Experiment._compute_metrics` method only computes accuracy by default. For real use you almost always want F1 or BalancedAccuracy too, especially on imbalanced datasets. I'd make those the default rather than opt-in.
+The `Experiment._compute_metrics` method only computes accuracy by default. For real use you almost always want F1 or BalancedAccuracy too, especially on imbalanced datasets. I'd make those the default rather than opt-in. (As of v0.2.0, `additional_metrics` now correctly passes `outputs` and `references` to each metric, so `BalancedAccuracy()` and `F1Score()` work properly via that parameter.)
 
 The REST API only supports `MockRunner`. Adding real provider support would require API key management in the API layer, which I deliberately deferred - the security surface is non-trivial and the CLI already handles real providers well.
 

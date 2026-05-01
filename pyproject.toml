@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evalkit-research"
-version = "0.1.0"
+version = "0.2.0"
 description = "Rigorous LLM evaluation: bootstrap CIs, significance testing, and automated statistical auditing"
 readme = "README.md"
 license = "MIT"

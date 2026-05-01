@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.2.0] - 2026-04-25
+
 ### Added
 
 - `evalkit run --judge llm` - LLM-as-judge from the CLI. Uses the same provider
@@ -24,10 +28,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   These linter suppression comments were written verbatim into every generated
   HTML report and rendered as visible text. A regression test now prevents this
   from recurring.
-- `Experiment.additional_metrics` docstring corrected: class-level metrics
-  (BalancedAccuracy, F1Score) and generation metrics (BLEU, ROUGE) should be
-  computed from `result.run_result.outputs` and `result.run_result.references`
-  after `.run()`, not via `additional_metrics` which only receives binary arrays.
+- `Experiment.additional_metrics` now passes `run_result.outputs` and
+  `run_result.references` to each metric instead of the binary correct/incorrect
+  array. `BalancedAccuracy()` and `F1Score()` passed via `additional_metrics` now
+  give correct, meaningful results on multi-class and imbalanced data. Previously
+  they always equalled `Accuracy` because both predictions and references were
+  the same all-ones binary array.
 - `.gitignore` extended to cover local scratch test files.
 
 ---
@@ -113,7 +119,7 @@ First public release.
 
 - `py.typed` marker - full PEP 561 compliance.
 - `mypy strict = true` - all public and private functions fully typed.
-- 394 tests, 100% coverage across 20 source files. Statistical property tests verify
+- 369 tests, 100% coverage across 20 source files. Statistical property tests verify
   CI coverage and width scaling with N. `stratify=False` where appropriate, documented
   in each test.
 - GitHub Actions CI: test matrix (Python 3.11, 3.12), ruff lint, mypy, full workflow
