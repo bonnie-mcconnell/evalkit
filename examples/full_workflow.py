@@ -16,9 +16,10 @@ What this covers:
   6. Multiple testing correction with Benjamini-Hochberg FDR
   7. Inter-rater agreement measurement (simulated LLM judges)
   8. RigorChecker audit - both a good and a bad experiment
-  9. Full Experiment object (combines all of the above)
+  9. Full Experiment object with additional_metrics on imbalanced data
  10. HTML tearsheet generation
  11. Direct model comparison with compare()
+ 11b. Save results and tearsheet (save, generate_report, comparison.save)
  12. Error analysis - worst_examples()
  13. Dataset utilities - split() and sample()
  14. Template validation before spending budget
@@ -70,6 +71,27 @@ except ImportError:
 
 
 def main() -> None:
+    # All imports use the public evalkit API (from evalkit import X).
+    # Never import from evalkit submodules in user code.
+    from evalkit import (
+        Accuracy,
+        BalancedAccuracy,
+        BHCorrection,
+        CohenKappa,
+        EvalDataset,
+        ExactMatchJudge,
+        Experiment,
+        F1Score,
+        McNemarTest,
+        MockRunner,
+        PowerAnalysis,
+        PrecisionScore,
+        PromptTemplate,
+        RecallScore,
+        ReportGenerator,
+        RigorChecker,
+    )
+
     _rule("evalkit - Full Workflow Demo")
     _print()
 
@@ -78,23 +100,20 @@ def main() -> None:
     # ──────────────────────────────────────────────────────────────────────────
     _print("[bold]Step 1: Power analysis - how many examples do we need?[/bold]")
 
-    from evalkit.analysis.power import PowerAnalysis
-
     pa = PowerAnalysis(alpha=0.05, power=0.80)
     ci_result = pa.for_ci_precision(desired_half_width=0.05, expected_accuracy=0.75)
     cmp_result = pa.for_proportion_difference(effect_size=0.05, p1=0.75)
 
     _print(f"  To report accuracy to ±5%:          need n >= {ci_result.minimum_n}")
     _print(f"  To detect a 5pp accuracy difference: need n >= {cmp_result.minimum_n}")
-    _print("  We will use n=400 -- adequately powered for both.")
+    _print("  We will use n=400 -- adequately powered for CI reporting (n≥323).")
+    _print("  Note: detecting a 5pp difference needs n≥1094 - we will see this warning.")
     _print()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Step 2: Build the dataset
     # ──────────────────────────────────────────────────────────────────────────
     _print("[bold]Step 2: Create evaluation dataset (n=400)[/bold]")
-
-    from evalkit.core.dataset import EvalDataset, PromptTemplate
 
     qa_pairs = [
         ("What is the capital of France?", "Paris"),
@@ -119,11 +138,14 @@ def main() -> None:
     # ──────────────────────────────────────────────────────────────────────────
     _print("[bold]Step 3: Evaluate Model A (mock, target accuracy ~82%)[/bold]")
 
-    from evalkit.core.judge import ExactMatchJudge
-    from evalkit.core.runner import MockRunner
-
     template = PromptTemplate("Answer concisely: {{ question }}")
     judge = ExactMatchJudge(case_sensitive=False)
+
+    # ContainsJudge is available for substring matching:
+    #   judge = ContainsJudge()  # score 1.0 if output contains the reference string
+    # Useful when model outputs are free-form sentences that should include a key phrase.
+    # Example: ContainsJudge().judge("The capital of France is Paris.", "Paris") → correct.
+    # For this demo we use ExactMatchJudge (strict equality) as the evaluation criterion.
 
     runner_a = MockRunner(judge=judge, template=template, accuracy=0.82, seed=42)
     result_a = runner_a.run(dataset)
@@ -135,8 +157,6 @@ def main() -> None:
     # Step 4: Metrics with bootstrap CIs
     # ──────────────────────────────────────────────────────────────────────────
     _print("[bold]Step 4: Compute metrics with 95% bootstrap confidence intervals[/bold]")
-
-    from evalkit.metrics.accuracy import Accuracy
 
     acc_metric = Accuracy(n_resamples=10_000, seed=42)
     acc = acc_metric.compute(result_a.correct, [1] * result_a.n)
@@ -163,8 +183,6 @@ def main() -> None:
     raw_b = sum(result_b.correct) / result_b.n
     _print(f"  [green]OK[/green] Model B done. Raw accuracy: {raw_b:.3f}")
 
-    from evalkit.metrics.comparison import McNemarTest
-
     test_result = McNemarTest(alpha=0.05).test(result_a.correct, result_b.correct)
     decision = "REJECT H0" if test_result.reject_null else "fail to reject H0"
     _print(
@@ -178,8 +196,6 @@ def main() -> None:
     # Step 6: Multiple testing correction - comparing 6 prompt variants
     # ──────────────────────────────────────────────────────────────────────────
     _print("[bold]Step 6: BH-FDR correction -- comparing 6 prompt variants[/bold]")
-
-    from evalkit.metrics.comparison import BHCorrection
 
     # Simulate 6 prompt variants: 1 genuine signal, 5 noise.
     # Prompt B at p=0.041 looks significant raw -- after BH it becomes
@@ -206,8 +222,6 @@ def main() -> None:
     # ──────────────────────────────────────────────────────────────────────────
     _print("[bold]Step 7: Validate LLM judge with inter-rater agreement[/bold]")
 
-    from evalkit.metrics.agreement import CohenKappa
-
     rng = np.random.default_rng(7)
     true_labels = rng.choice([0, 1], size=100, p=[0.4, 0.6]).tolist()
 
@@ -228,11 +242,11 @@ def main() -> None:
     # ──────────────────────────────────────────────────────────────────────────
     _print("[bold]Step 8: RigorChecker -- automated statistical audit[/bold]")
 
-    from evalkit.analysis.rigour import RigorChecker
-
     checker = RigorChecker()
 
-    # Well-designed experiment.
+    # Adequate experiment: single variant, balanced classes, reasonable N.
+    # The RigorChecker will still warn about comparison power at n=400 -
+    # PASS (1 warning) is the correct and honest result here.
     good_report = checker.audit(
         n_examples=400,
         accuracy=0.82,
@@ -240,7 +254,7 @@ def main() -> None:
         n_variants=1,
         experiment_name="model_a_evaluation",
     )
-    _print("Well-designed experiment:")
+    _print("Adequate experiment (PASS with advisory warning):")
     _print(str(good_report))
 
     # Bad experiment: the kind that gets published without evalkit.
@@ -253,19 +267,59 @@ def main() -> None:
         judge_kappa=0.41,
         experiment_name="underpowered_eval",
     )
-    _print("Poorly designed experiment:")
+    _print("Poorly designed experiment (FAIL - multiple errors):")
     _print(str(bad_report))
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Step 9: Full Experiment object (combines all steps automatically)
+    # Step 9: Full Experiment with additional_metrics on imbalanced data
+    #
+    # Important: on the BALANCED dataset above, Accuracy ≈ BalancedAccuracy ≈
+    # F1 ≈ Precision ≈ Recall - they all converge when classes are balanced and
+    # errors are uniform. That's expected and correct.
+    #
+    # The metrics diverge on IMBALANCED data with class-biased errors. We
+    # demonstrate that here using the bundled demo dataset, where the model
+    # makes proportionally more errors on the minority class.
     # ──────────────────────────────────────────────────────────────────────────
-    _print("[bold]Step 9: Full Experiment -- everything in one object[/bold]")
+    _print("[bold]Step 9: additional_metrics on imbalanced data[/bold]")
+    _print(
+        "  Note: on a balanced dataset with uniform errors, Accuracy ≈ BalancedAccuracy\n"
+        "  ≈ F1 ≈ Precision ≈ Recall. The metrics diverge on imbalanced data.\n"
+        "  Using the bundled underpowered_imbalanced_demo.jsonl to show the difference:"
+    )
+    _print()
 
-    from evalkit.core.experiment import Experiment
+    # Load the imbalanced demo dataset (28 examples, 93% positive / 7% negative)
+    demo_path = Path(__file__).parent / "data" / "underpowered_imbalanced_demo.jsonl"
+    imbalanced_ds = EvalDataset.from_jsonl(str(demo_path), reference_field="label")
+    demo_runner = MockRunner(
+        judge=ExactMatchJudge(), template=PromptTemplate("{{ text }}"), accuracy=0.82, seed=42
+    )
 
-    exp = Experiment(name="qa_benchmark_model_a", dataset=dataset, runner=runner_a)
-    exp_result = exp.run()
-    exp_result.print_summary()
+    imbalanced_exp = Experiment(
+        name="imbalanced_demo",
+        dataset=imbalanced_ds,
+        runner=demo_runner,
+        additional_metrics=[
+            BalancedAccuracy(n_resamples=2000),
+            F1Score(average="macro", n_resamples=2000),
+            PrecisionScore(average="macro", n_resamples=2000),
+            RecallScore(average="macro", n_resamples=2000),
+        ],
+        n_resamples=2000,
+    )
+    imbalanced_result = imbalanced_exp.run()
+    imbalanced_result.print_summary()
+
+    _panel(
+        "On this imbalanced dataset (93% positive / 7% negative),\n"
+        "Accuracy is inflated by the majority class. BalancedAccuracy,\n"
+        "F1Score, Precision, and Recall tell the real story.\n\n"
+        "RigorChecker flags SAMPLE_TOO_SMALL and SEVERE_CLASS_IMBALANCE.",
+        title="Why additional_metrics matter on imbalanced data",
+        colour="yellow",
+    )
+    _print()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Step 10: HTML tearsheet
@@ -274,7 +328,9 @@ def main() -> None:
 
     import tempfile
 
-    from evalkit.analysis.report import ReportGenerator
+    # Use a balanced experiment result for the tearsheet demo
+    exp_for_report = Experiment("qa_benchmark_model_a", dataset, runner_a, n_resamples=2000)
+    exp_result = exp_for_report.run()
 
     # Write to a temp file so the demo leaves no artifacts in the repo.
     # In real use: ReportGenerator().generate(result, output_path="report.html")
@@ -297,6 +353,36 @@ def main() -> None:
 
     comparison = res_a.compare(res_b)
     _print(str(comparison))
+    _print()
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 11b: Save results and generate a tearsheet
+    # ──────────────────────────────────────────────────────────────────────────
+    import tempfile
+
+    _print("[bold]Step 11b: Save results and generate HTML tearsheet[/bold]")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        td = Path(tmpdir)
+
+        # Save experiment results - same schema as evalkit compare expects
+        res_a.save(td / "model_a.json")
+        res_b.save(td / "model_b.json")
+        _print("  Results saved: model_a.json, model_b.json")
+        _print("  (Pass these to: evalkit compare model_a.json model_b.json)")
+
+        # Save comparison result
+        comparison.save(td / "comparison.json")
+        _print("  Comparison saved: comparison.json")
+
+        # Generate HTML tearsheet
+        res_a.generate_report(td / "model_a_report.html")
+        _print("  HTML tearsheet: model_a_report.html")
+        _print()
+        _print(
+            "  In production: attach comparison.json and the tearsheet to your PR."
+            " The RigorChecker result in the tearsheet tells reviewers whether"
+            " the improvement is statistically defensible."
+        )
     _print()
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -350,8 +436,6 @@ def main() -> None:
     # ──────────────────────────────────────────────────────────────────────────
     _print("[bold]Step 15: Sample size planning table - how many examples do I need?[/bold]")
 
-    from evalkit.analysis.power import PowerAnalysis
-
     PowerAnalysis(alpha=0.05).sample_size_table(
         effect_sizes=[0.05, 0.10, 0.15, 0.20],
         powers=[0.70, 0.80, 0.90],
@@ -369,6 +453,8 @@ def main() -> None:
         "  * Inter-rater agreement validating a judge\n"
         "  * RigorChecker audit surfacing statistical problems\n"
         "  * Self-contained HTML tearsheet\n"
+        "  * BalancedAccuracy, F1Score, PrecisionScore, RecallScore\n"
+        "      on imbalanced data - showing when they diverge from Accuracy\n"
         "  * result_a.compare(result_b) - direct comparison with significance test\n"
         "  * worst_examples() - error analysis on confident mistakes\n"
         "  * split() and sample() - dataset utilities\n"

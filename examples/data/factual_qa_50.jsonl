@@ -1,0 +1,50 @@
+{"id": "geo_001", "question": "What is the capital city of France?", "answer": "Paris", "category": "geography"}
+{"id": "geo_002", "question": "What is the capital city of Japan?", "answer": "Tokyo", "category": "geography"}
+{"id": "geo_003", "question": "What is the capital city of Australia?", "answer": "Canberra", "category": "geography"}
+{"id": "geo_004", "question": "What is the capital city of Mexico?", "answer": "Mexico City", "category": "geography"}
+{"id": "geo_005", "question": "What is the capital city of Canada?", "answer": "Ottawa", "category": "geography"}
+{"id": "geo_006", "question": "What is the capital city of Germany?", "answer": "Berlin", "category": "geography"}
+{"id": "geo_007", "question": "What is the capital city of Italy?", "answer": "Rome", "category": "geography"}
+{"id": "geo_008", "question": "What is the capital city of Spain?", "answer": "Madrid", "category": "geography"}
+{"id": "geo_009", "question": "What is the capital city of Egypt?", "answer": "Cairo", "category": "geography"}
+{"id": "geo_010", "question": "What is the capital city of Argentina?", "answer": "Buenos Aires", "category": "geography"}
+{"id": "geo_011", "question": "What is the longest river in the world?", "answer": "Nile", "category": "geography"}
+{"id": "geo_012", "question": "What is the largest ocean on Earth?", "answer": "Pacific", "category": "geography"}
+{"id": "geo_013", "question": "What is the smallest country in the world by area?", "answer": "Vatican", "category": "geography"}
+{"id": "geo_014", "question": "What is the highest mountain in the world?", "answer": "Everest", "category": "geography"}
+{"id": "geo_015", "question": "What is the largest desert in the world?", "answer": "Sahara", "category": "geography"}
+{"id": "sci_001", "question": "What is the chemical element with the symbol Au?", "answer": "gold", "category": "science"}
+{"id": "sci_002", "question": "What is the chemical element with the symbol Fe?", "answer": "iron", "category": "science"}
+{"id": "sci_003", "question": "What is the chemical element with the symbol Na?", "answer": "sodium", "category": "science"}
+{"id": "sci_004", "question": "What is the chemical element with the symbol K?", "answer": "potassium", "category": "science"}
+{"id": "sci_005", "question": "What planet is known as the Red Planet?", "answer": "Mars", "category": "science"}
+{"id": "sci_006", "question": "What is the name of the star at the centre of our solar system?", "answer": "Sun", "category": "science"}
+{"id": "sci_007", "question": "What gas do plants absorb from the atmosphere during photosynthesis?", "answer": "carbon dioxide", "category": "science"}
+{"id": "sci_008", "question": "What element is found in all organic molecules and has atomic number 6?", "answer": "carbon", "category": "science"}
+{"id": "sci_009", "question": "How many bones are in the adult human body?", "answer": "206", "category": "science"}
+{"id": "sci_010", "question": "What is the powerhouse of the cell?", "answer": "mitochondria", "category": "science"}
+{"id": "sci_011", "question": "What force keeps planets in orbit around the Sun?", "answer": "gravity", "category": "science"}
+{"id": "sci_012", "question": "What is the most abundant gas in Earth's atmosphere?", "answer": "nitrogen", "category": "science"}
+{"id": "sci_013", "question": "What element has the atomic number 1?", "answer": "hydrogen", "category": "science"}
+{"id": "sci_014", "question": "What is the name of the galaxy that contains our solar system?", "answer": "Milky Way", "category": "science"}
+{"id": "sci_015", "question": "What is the name of the process by which water changes from liquid to gas?", "answer": "evaporation", "category": "science"}
+{"id": "hist_001", "question": "In what year did World War II end?", "answer": "1945", "category": "history"}
+{"id": "hist_002", "question": "Who was the first President of the United States?", "answer": "Washington", "category": "history"}
+{"id": "hist_003", "question": "In what year did the Berlin Wall fall?", "answer": "1989", "category": "history"}
+{"id": "hist_004", "question": "Who wrote the play Hamlet?", "answer": "Shakespeare", "category": "history"}
+{"id": "hist_005", "question": "In what year did World War I begin?", "answer": "1914", "category": "history"}
+{"id": "hist_006", "question": "Who was the first person to walk on the Moon?", "answer": "Armstrong", "category": "history"}
+{"id": "hist_007", "question": "What ancient wonder was located in Alexandria, Egypt?", "answer": "lighthouse", "category": "history"}
+{"id": "hist_008", "question": "In what year did the French Revolution begin?", "answer": "1789", "category": "history"}
+{"id": "hist_009", "question": "What Scottish-born inventor is credited with patenting the telephone in 1876?", "answer": "Alexander Graham Bell", "category": "history"}
+{"id": "hist_010", "question": "In what year did humans first land on the Moon?", "answer": "1969", "category": "history"}
+{"id": "lang_001", "question": "What is the name of the alphabet used to write Russian?", "answer": "Cyrillic", "category": "language"}
+{"id": "lang_002", "question": "What language is spoken in Brazil?", "answer": "Portuguese", "category": "language"}
+{"id": "lang_003", "question": "What is the most widely spoken language in the world by native speakers?", "answer": "Mandarin", "category": "language"}
+{"id": "lang_004", "question": "In which language was the original Bible written (New Testament)?", "answer": "Greek", "category": "language"}
+{"id": "lang_005", "question": "What is the official language of Mexico?", "answer": "Spanish", "category": "language"}
+{"id": "math_001", "question": "What is the word for the number that comes after eleven?", "answer": "twelve", "category": "math"}
+{"id": "math_002", "question": "What is the value of pi to two decimal places?", "answer": "3.14", "category": "math"}
+{"id": "math_003", "question": "What is the name of a polygon with eight sides?", "answer": "octagon", "category": "math"}
+{"id": "math_004", "question": "What is the name for a shape with three sides?", "answer": "triangle", "category": "math"}
+{"id": "math_005", "question": "What do you call a polygon with five sides?", "answer": "pentagon", "category": "math"}
