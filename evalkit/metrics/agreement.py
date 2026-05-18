@@ -243,7 +243,8 @@ class KrippendorffAlpha:
             import krippendorff
         except ImportError:
             raise ImportError(
-                "krippendorff is required for KrippendorffAlpha. pip install krippendorff"
+                "krippendorff is required for KrippendorffAlpha. "
+                'Install with: pip install "evalkit-research[agreement]"'
             )
 
         if len(ratings) < 2:

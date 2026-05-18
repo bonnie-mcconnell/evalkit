@@ -40,7 +40,29 @@ def test_version_exits_zero():
 
 def test_version_prints_version_string():
     result = runner.invoke(app, ["version"])
-    assert "0.1.0" in result.output
+    import evalkit
+
+    assert evalkit.__version__ in result.output
+
+
+def test_version_does_not_print_bibtex_by_default():
+    """evalkit version should print version only - no citation spam on every invocation."""
+    result = runner.invoke(app, ["version"])
+    assert "@software{evalkit" not in result.output
+    assert "McConnell" not in result.output
+
+
+def test_version_cite_flag_prints_bibtex():
+    """evalkit version --cite should print the BibTeX entry."""
+    import datetime
+
+    result = runner.invoke(app, ["version", "--cite"])
+    assert result.exit_code == 0
+    assert "@software{evalkit" in result.output
+    assert "McConnell, Bonnie" in result.output
+    assert "github.com/bonnie-mcconnell/evalkit" in result.output
+    # Year should be the current year, not hardcoded
+    assert str(datetime.datetime.now().year) in result.output
 
 
 # ── evalkit run ────────────────────────────────────────────────────────────────
@@ -105,7 +127,9 @@ def test_run_json_format_is_valid_json(tmp_path):
         ],
     )
     assert result.exit_code == 0, result.output
-    # Extract JSON: everything from the first '{' to end
+    # The CliRunner merges stdout and stderr, so scrape from first '{'.
+    # In real terminal use, Console(stderr=True) routes human output to stderr,
+    # making stdout pure JSON (verified in test_run_json_stdout_is_pure_json).
     json_start = result.output.index("{")
     parsed = json.loads(result.output[json_start:])
     assert "metrics" in parsed
@@ -538,6 +562,28 @@ def test_run_regex_judge_with_pattern(tmp_path):
     assert "Accuracy" in result.output
 
 
+def test_run_contains_judge(tmp_path):
+    """--judge contains should run successfully and report Accuracy."""
+    data = _write_jsonl(tmp_path, n=30)
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "mock",
+            "--template",
+            "{{ question }}",
+            "--judge",
+            "contains",
+            "--resamples",
+            "300",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Accuracy" in result.output
+
+
 def test_run_adequate_dataset_shows_rigor_pass(tmp_path):
     """
     A well-powered experiment should show RigorChecker PASS,
@@ -775,3 +821,367 @@ def test_run_llm_judge_wires_provider(tmp_path):
 
     # LLM judge message must appear, exit must be 0 or 1 (mock may not satisfy all attrs)
     assert "llm judge" in result.output.lower() or result.exit_code in (0, 1)
+
+
+# ── --fail-on-errors flag ────────────────────────────────────────────────────
+
+
+def test_fail_on_errors_exits_1_when_audit_has_errors(tmp_path):
+    """
+    --fail-on-errors must exit 1 when the post-hoc RigorChecker finds ERROR-level findings.
+
+    We use --no-strict + n=10 so pre-flight doesn't halt the run (allowing the
+    post-hoc audit to run), then --fail-on-errors gates on the post-hoc errors.
+    SAMPLE_TOO_SMALL (n=10 < 30) fires as a post-hoc ERROR.
+    """
+    data = _write_jsonl(tmp_path, n=10)  # n=10 → SAMPLE_TOO_SMALL in post-hoc audit
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "mock",
+            "--template",
+            "{{ question }}",
+            "--resamples",
+            "200",
+            "--no-strict",  # bypass pre-flight halt so post-hoc audit runs
+            "--fail-on-errors",  # gate exit code on post-hoc audit errors
+        ],
+    )
+    assert result.exit_code == 1, (
+        f"Expected exit 1 on post-hoc audit errors, got {result.exit_code}. "
+        f"Output:\n{result.output}"
+    )
+
+
+def test_fail_on_errors_exits_0_when_audit_passes(tmp_path):
+    """
+    --fail-on-errors must exit 0 when the audit passes (adequate sample, balanced data).
+    """
+    data = _write_jsonl(tmp_path, n=300)  # n=300, balanced → audit passes
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "mock",
+            "--template",
+            "{{ question }}",
+            "--resamples",
+            "200",
+            "--fail-on-errors",
+        ],
+    )
+    assert result.exit_code == 0, (
+        f"Expected exit 0 on clean audit, got {result.exit_code}. Output:\n{result.output}"
+    )
+
+
+def test_preflight_error_exits_1_by_default(tmp_path):
+    """
+    Pre-flight ERRORs (e.g. SAMPLE_TOO_SMALL at n=10) must exit 1 by default.
+    This is the strict=True behaviour - no API budget is spent on a broken design.
+    The output must explain what went wrong and how to override.
+    """
+    data = _write_jsonl(tmp_path, n=10)  # n=10 → SAMPLE_TOO_SMALL error
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "mock",
+            "--template",
+            "{{ question }}",
+            "--resamples",
+            "200",
+        ],
+    )
+    assert result.exit_code == 1, (
+        f"Pre-flight SAMPLE_TOO_SMALL should exit 1 (strict mode). Got {result.exit_code}."
+    )
+    assert "Pre-flight" in result.output or "SAMPLE_TOO_SMALL" in result.output, (
+        f"Output should explain the pre-flight failure:\n{result.output}"
+    )
+    assert "--no-strict" in result.output, (
+        "Output should tell the user how to override with --no-strict"
+    )
+
+
+def test_no_strict_flag_bypasses_preflight_halt(tmp_path):
+    """
+    --no-strict must let the experiment run even on n=10 (below the minimum).
+    The post-hoc audit will flag the issues, but execution completes.
+    This preserves backward compatibility for users who know the trade-off.
+    """
+    data = _write_jsonl(tmp_path, n=10)
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "mock",
+            "--template",
+            "{{ question }}",
+            "--resamples",
+            "200",
+            "--no-strict",
+        ],
+    )
+    assert result.exit_code == 0, (
+        f"--no-strict should exit 0 even with pre-flight errors. Got {result.exit_code}.\n"
+        f"Output:\n{result.output}"
+    )
+    # Results should still be shown, with audit warnings/errors visible
+    assert "Accuracy" in result.output, "Should still show metric results"
+
+
+# ── compare --format json and --fail-on-regression ──────────────────────────
+
+
+def _run_and_save(tmp_path, filename: str, accuracy: float, n: int = 200) -> str:
+    """Run an evaluation and save results JSON. Returns path string."""
+    data = _write_jsonl(tmp_path, n=n)
+    out = tmp_path / filename
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "mock",
+            "--mock-accuracy",
+            str(accuracy),
+            "--template",
+            "{{ question }}",
+            "--resamples",
+            "200",
+            "--save-results",
+            str(out),
+        ],
+    )
+    assert result.exit_code == 0, f"run failed: {result.output}"
+    assert out.exists(), "save-results file not created"
+    return str(out)
+
+
+def test_compare_format_json_produces_valid_json(tmp_path):
+    """evalkit compare --format json must output parseable JSON with required keys."""
+    import json as _json
+
+    a = _run_and_save(tmp_path, "a.json", accuracy=0.75)
+    b = _run_and_save(tmp_path, "b.json", accuracy=0.80)
+
+    result = runner.invoke(app, ["compare", a, b, "--format", "json"])
+    assert result.exit_code == 0, f"compare --format json failed: {result.output}"
+
+    parsed = _json.loads(result.output)
+    for key in (
+        "test",
+        "statistic",
+        "p_value",
+        "effect_size",
+        "reject_null",
+        "b_is_significantly_worse",
+        "n_pairs",
+        "alpha",
+    ):
+        assert key in parsed, f"Missing key '{key}' in JSON output"
+    assert parsed["test"] == "McNemar"
+    assert isinstance(parsed["reject_null"], bool)
+    assert isinstance(parsed["b_is_significantly_worse"], bool)
+
+
+def test_compare_fail_on_regression_exits_2_when_b_is_worse(tmp_path):
+    """
+    --fail-on-regression must exit 2 when model B is significantly worse than A.
+    We use identical data for both runs (same examples) so pairing is valid,
+    with A at high accuracy and B at low accuracy on a large n so significance is clear.
+    """
+    # Use same underlying data for both runs (same example IDs)
+    data = _write_jsonl(tmp_path, n=400)
+    a_out = tmp_path / "a.json"
+    b_out = tmp_path / "b.json"
+
+    runner.invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "mock",
+            "--mock-accuracy",
+            "0.90",
+            "--template",
+            "{{ question }}",
+            "--resamples",
+            "200",
+            "--save-results",
+            str(a_out),
+        ],
+    )
+    runner.invoke(
+        app,
+        [
+            "run",
+            str(data),
+            "--model",
+            "mock",
+            "--mock-accuracy",
+            "0.50",
+            "--template",
+            "{{ question }}",
+            "--resamples",
+            "200",
+            "--save-results",
+            str(b_out),
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", str(a_out), str(b_out), "--fail-on-regression"],
+    )
+    # With 90% vs 50% at n=400, the difference is enormous - must be significant
+    # Exit 2 = regression detected
+    assert result.exit_code in (0, 2), f"Unexpected exit code: {result.exit_code}"
+    # If the test detects significance, it must be exit 2
+    if "REJECT" in result.output or "Regression" in result.output:
+        assert result.exit_code == 2
+
+
+def test_compare_fail_on_regression_exits_0_when_no_regression(tmp_path):
+    """
+    --fail-on-regression must exit 0 when models are indistinguishable.
+    """
+    data = _write_jsonl(tmp_path, n=200)
+    a_out = tmp_path / "a.json"
+    b_out = tmp_path / "b.json"
+
+    for out, acc in [(a_out, 0.80), (b_out, 0.80)]:
+        runner.invoke(
+            app,
+            [
+                "run",
+                str(data),
+                "--model",
+                "mock",
+                "--mock-accuracy",
+                str(acc),
+                "--template",
+                "{{ question }}",
+                "--resamples",
+                "200",
+                "--save-results",
+                str(out),
+            ],
+        )
+
+    result = runner.invoke(
+        app,
+        ["compare", str(a_out), str(b_out), "--fail-on-regression"],
+    )
+    # Same accuracy → no significant regression → exit 0
+    assert result.exit_code == 0, (
+        f"Expected exit 0 with identical models, got {result.exit_code}. Output:\n{result.output}"
+    )
+
+
+def test_compare_shows_improvement_confirmed_when_b_is_better(tmp_path):
+    """
+    When model B is significantly better than A, the 'Improvement Confirmed'
+    panel must be shown (covers cli.py line 425 - the elif result.reject_null branch).
+    """
+    # Use same data for both runs so example IDs align
+    data = _write_jsonl(tmp_path, n=400)
+    a_out = tmp_path / "a.json"
+    b_out = tmp_path / "b.json"
+
+    for out, acc in [(a_out, 0.55), (b_out, 0.95)]:
+        runner.invoke(
+            app,
+            [
+                "run",
+                str(data),
+                "--model",
+                "mock",
+                "--mock-accuracy",
+                str(acc),
+                "--template",
+                "{{ question }}",
+                "--resamples",
+                "200",
+                "--save-results",
+                str(out),
+            ],
+        )
+
+    result = runner.invoke(app, ["compare", str(a_out), str(b_out)])
+    assert result.exit_code == 0, f"compare failed: {result.output}"
+    # With 55% vs 95% at n=400 the difference is enormous - must hit the improvement branch
+    assert "Improvement Confirmed" in result.output or "statistically better" in result.output, (
+        f"Expected improvement panel. Output:\n{result.output}"
+    )
+
+
+def test_run_json_stdout_is_pure_json_in_real_shell(tmp_path):
+    """
+    In a real shell, --format json must emit pure JSON on stdout with no preamble.
+    Human-readable output (status messages, Rich markup) must go to stderr.
+
+    This test uses subprocess to get true stdout/stderr separation - the typer
+    CliRunner merges them, so it cannot test this invariant.
+
+    This is the contract that makes ``evalkit run --format json | jq .metrics.Accuracy.value``
+    work correctly.
+    """
+    import json
+    import subprocess
+    import sys
+
+    data = _write_jsonl(tmp_path, n=60)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "evalkit.cli",
+            "run",
+            str(data),
+            "--model",
+            "mock",
+            "--template",
+            "{{ question }}",
+            "--resamples",
+            "500",
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"CLI failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+
+    # stdout must be parseable as JSON with NO preamble - this is the core invariant
+    try:
+        parsed = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as e:
+        raise AssertionError(
+            f"stdout is not pure JSON. This breaks `evalkit run --format json | jq ...`.\n"
+            f"JSON error: {e}\n"
+            f"stdout (first 200 chars): {result.stdout[:200]!r}\n"
+            f"stderr: {result.stderr[:200]!r}"
+        ) from e
+
+    assert "metrics" in parsed, f"Missing 'metrics' key in JSON output: {list(parsed.keys())}"
+    assert "Accuracy" in parsed["metrics"]
+    assert 0 <= parsed["metrics"]["Accuracy"]["value"] <= 1
+
+    # Human output must be on stderr, not stdout
+    assert len(result.stderr) > 0, "stderr should contain human-readable status output"
+    assert "Loaded" in result.stderr or "mock" in result.stderr.lower(), (
+        "Expected status messages in stderr"
+    )

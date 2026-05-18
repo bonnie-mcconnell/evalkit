@@ -63,10 +63,12 @@ class ExampleResult:
 
     @property
     def is_correct(self) -> bool:
+        """True if the judge marked this example as correct (score ≥ threshold)."""
         return self.judgment.is_correct
 
     @property
     def score(self) -> float:
+        """Raw score from the judge, in [0, 1]. 1.0 = perfect match."""
         return self.judgment.score
 
 
@@ -100,6 +102,7 @@ class RunResult:
 
     @property
     def n(self) -> int:
+        """Number of examples evaluated."""
         return len(self.example_results)
 
     @property
@@ -114,14 +117,17 @@ class RunResult:
 
     @property
     def example_ids(self) -> list[str]:
+        """Ordered list of example IDs, aligned with example_results."""
         return [r.example_id for r in self.example_results]
 
     @property
     def references(self) -> list[Any]:
+        """Ground-truth reference labels, aligned with example_results."""
         return [r.reference for r in self.example_results]
 
     @property
     def outputs(self) -> list[str]:
+        """Raw model outputs, aligned with example_results."""
         return [r.output for r in self.example_results]
 
     def cost_per_correct(self) -> float | None:
@@ -132,6 +138,7 @@ class RunResult:
         return self.total_cost_usd / n_correct
 
     def summary(self) -> dict[str, Any]:
+        """Summary statistics as a dict. Useful for quick inspection or logging."""
         raw_accuracy = sum(self.correct) / self.n if self.n else 0.0
         return {
             "model": self.model,
@@ -160,7 +167,10 @@ class RunResult:
         try:
             import pandas as pd
         except ImportError:
-            raise ImportError("pandas is required for to_dataframe(). pip install pandas") from None
+            raise ImportError(
+                "pandas is required for to_dataframe(). "
+                'Install with: pip install "evalkit-research[dataframe]"'
+            ) from None
 
         rows = [
             {
@@ -409,9 +419,13 @@ class MockRunner:
     is only meaningful relative to the reference answer - which the provider
     layer has no access to.
 
-    The mock output on a correct example is the reference answer itself, so
-    any judge that accepts the reference as correct will score it as 1.0.
-    On incorrect examples, it returns a deterministic but wrong value.
+    On a correct example, the output is ``str(reference)``.
+    On an incorrect example, the output is a *different valid label* drawn
+    deterministically from the dataset's label set. This means F1Score,
+    PrecisionScore, and RecallScore via ``additional_metrics`` produce
+    meaningful results - sklearn never sees spurious out-of-vocabulary strings.
+    If the dataset has only one unique label, wrong outputs fall back to
+    ``__wrong_N__``.
 
     Parameters
     ----------
@@ -445,15 +459,35 @@ class MockRunner:
         start = time.monotonic()
         results = []
 
+        # Collect all unique reference labels so wrong answers can be drawn
+        # from the actual label set. This makes F1, Precision, and Recall
+        # computed via additional_metrics meaningful - sklearn sees only valid
+        # class labels rather than the spurious '__wrong_N__' strings.
+        all_refs = sorted({str(ex.reference) for ex in dataset})
+
         for example in dataset:
             prompt = example.render(self.template)
 
-            # Deterministic per-example seed derived from the base seed and example id.
-            # Same seed + same dataset always produces the same results.
+            # Deterministic per-example seed: MD5 of "{base_seed}:{example_id}".
+            # MD5 is used here for its speed and compact 32-char hex output -
+            # this is not a security context, just a cheap deterministic hash.
+            # SHA-256 would produce the same result with higher overhead.
+            # Taking only the first 8 hex chars (32-bit) is sufficient given
+            # we're mapping into a 10,000-bucket space (accuracy resolution 0.01%).
             digest = int(hashlib.md5(f"{self.seed}:{example.id}".encode()).hexdigest()[:8], 16)
             is_correct = (digest % 10000) < int(self.accuracy * 10000)
 
-            output = str(example.reference) if is_correct else f"__wrong_{digest % 100}__"
+            if is_correct:
+                output = str(example.reference)
+            elif len(all_refs) > 1:
+                # Pick a different valid label deterministically.
+                # Filter out the correct label, then index into the remainder.
+                wrong_refs = [r for r in all_refs if r != str(example.reference)]
+                output = wrong_refs[digest % len(wrong_refs)]
+            else:
+                # Degenerate case: only one unique label in the dataset.
+                output = f"__wrong_{digest % 100}__"
+
             judgment = self.judge.judge(output, example.reference)
 
             results.append(

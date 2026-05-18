@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from scipy import stats
@@ -113,6 +114,46 @@ class MultipleComparisonResult:
             flag = "✓" if reject else "✗"
             lines.append(f"  {flag} {name}: p_raw={p_raw:.4f} → p_adj={p_adj:.4f}")
         return "\n".join(lines)
+
+    def save(self, path: str | Path) -> Path:
+        """
+        Save the FDR correction result to a JSON file.
+
+        Parameters
+        ----------
+        path:
+            Destination file path. Parent directories are created automatically.
+
+        Returns
+        -------
+        The resolved path of the saved file.
+        """
+        import json
+
+        dest = Path(path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        payload = {
+            "alpha": self.alpha,
+            "expected_false_positives": self.expected_false_positives,
+            "false_positive_warning": self.false_positive_warning,
+            "comparisons": [
+                {
+                    "name": name,
+                    "p_raw": p_raw,
+                    "p_adj": p_adj,
+                    "reject_null": reject,
+                }
+                for name, p_raw, p_adj, reject in zip(
+                    self.comparison_names,
+                    self.unadjusted_p_values,
+                    self.adjusted_p_values,
+                    self.reject_null,
+                )
+            ],
+        }
+        dest.write_text(json.dumps(payload, indent=2))
+        return dest
 
 
 class McNemarTest:

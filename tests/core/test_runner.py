@@ -176,3 +176,59 @@ def test_run_result_to_dataframe_raises_without_pandas(monkeypatch, dataset, tem
 
     with pytest.raises((ImportError, TypeError)):
         run_result.to_dataframe()
+
+
+def test_mock_runner_wrong_outputs_are_valid_class_labels(dataset, template):
+    """
+    MockRunner wrong outputs must be valid class labels from the dataset,
+    not '__wrong_N__' strings. This ensures F1Score, PrecisionScore, and
+    RecallScore via additional_metrics produce meaningful results - sklearn
+    never sees spurious out-of-vocabulary prediction strings.
+    """
+    runner = MockRunner(judge=ExactMatchJudge(), template=template, accuracy=0.50, seed=0)
+    run_result = runner.run(dataset)
+
+    valid_refs = {str(ex.reference) for ex in dataset}
+    for r in run_result.example_results:
+        assert r.output in valid_refs, (
+            f"MockRunner output {r.output!r} is not a valid class label. "
+            f"Valid labels: {valid_refs}. "
+            "Wrong outputs must be drawn from the dataset's label set."
+        )
+
+
+def test_mock_runner_wrong_outputs_differ_from_reference(dataset, template):
+    """
+    When MockRunner produces a wrong answer, the output must differ from
+    the reference - otherwise ExactMatchJudge would score it as correct.
+    """
+    runner = MockRunner(judge=ExactMatchJudge(), template=template, accuracy=0.50, seed=0)
+    run_result = runner.run(dataset)
+
+    for r in run_result.example_results:
+        if not r.is_correct:
+            assert r.output != str(r.reference), (
+                f"Wrong output {r.output!r} equals reference {r.reference!r}. "
+                "MockRunner should never produce the correct answer on a wrong example."
+            )
+
+
+def test_mock_runner_degenerate_single_label(template):
+    """
+    With only one unique label in the dataset, wrong outputs fall back to
+    '__wrong_N__' since there's no other valid label to pick.
+    """
+    from evalkit import EvalDataset
+
+    records = [{"id": str(i), "question": f"q{i}", "label": "yes"} for i in range(20)]
+    single_label_ds = EvalDataset.from_list(records, name="single_label")
+
+    runner = MockRunner(judge=ExactMatchJudge(), template=template, accuracy=0.50, seed=0)
+    run_result = runner.run(single_label_ds)
+
+    # Some outputs will be wrong; they should use __wrong_N__ fallback
+    wrong_outputs = [r.output for r in run_result.example_results if not r.is_correct]
+    for out in wrong_outputs:
+        assert out.startswith("__wrong_"), (
+            f"Single-label dataset: expected fallback '__wrong_N__', got {out!r}"
+        )

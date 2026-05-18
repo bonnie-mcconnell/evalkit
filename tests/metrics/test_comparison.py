@@ -226,3 +226,42 @@ def test_wilcoxon_small_n_logs_warning(caplog):
         WilcoxonTest().test(a, b)
 
     assert any("low power" in r.message.lower() or "n=15" in r.message for r in caplog.records)
+
+
+# ── MultipleComparisonResult.save() ───────────────────────────────────────────
+
+
+def test_multiple_comparison_result_save(tmp_path):
+    """MultipleComparisonResult.save() writes JSON with all comparison fields."""
+    import json
+
+    from evalkit import BHCorrection
+
+    result = BHCorrection(alpha=0.05).correct(
+        p_values=[0.01, 0.04, 0.20, 0.50],
+        comparison_names=["v1", "v2", "v3", "v4"],
+    )
+    out = tmp_path / "bh.json"
+    returned = result.save(out)
+
+    assert returned == out
+    assert out.exists()
+
+    data = json.loads(out.read_text())
+    assert "alpha" in data
+    assert "comparisons" in data
+    assert len(data["comparisons"]) == 4
+    assert all(
+        "name" in c and "p_raw" in c and "p_adj" in c and "reject_null" in c
+        for c in data["comparisons"]
+    )
+
+
+def test_multiple_comparison_result_save_creates_parents(tmp_path):
+    """save() creates parent directories automatically."""
+    from evalkit import BHCorrection
+
+    result = BHCorrection().correct([0.01, 0.50])
+    out = tmp_path / "nested" / "bh.json"
+    result.save(out)
+    assert out.exists()

@@ -26,6 +26,8 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from evalkit import __version__
+
 logger = logging.getLogger(__name__)
 
 RESULTS_DIR = Path("./results")
@@ -41,7 +43,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="evalkit API",
     description="Rigorous LLM evaluation with bootstrap CIs and automated auditing.",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -51,13 +53,25 @@ app = FastAPI(
 
 class RunRequest(BaseModel):
     dataset_records: list[dict[str, Any]] = Field(
-        description="List of evaluation examples. Each must have a 'label' field."
+        description=(
+            "List of evaluation examples. Each must have a 'label' field "
+            "(or the field named by reference_field)."
+        ),
+        min_length=1,
+        max_length=10_000,
     )
-    model: str = Field(default="mock", description="Model to evaluate: mock, gpt-4o, etc.")
+    model: str = Field(
+        default="mock",
+        description=(
+            "Model to evaluate. Currently only 'mock' is supported via the REST API. "
+            "For real providers (gpt-4o, claude-*, etc.) use the CLI: "
+            "'evalkit run data.jsonl --model gpt-4o'"
+        ),
+    )
     template: str = Field(default="{{ question }}", description="Jinja2 prompt template.")
     reference_field: str = Field(default="label")
     mock_accuracy: float = Field(default=0.82, ge=0.0, le=1.0)
-    n_resamples: int = Field(default=5000, ge=100)
+    n_resamples: int = Field(default=5000, ge=100, le=100_000)
 
 
 class CompareRequest(BaseModel):
@@ -100,12 +114,21 @@ def _run_evaluation(run_id: str, request: RunRequest) -> None:
         if request.model == "mock":
             runner = MockRunner(judge=judge, template=template, accuracy=request.mock_accuracy)
         else:
-            raise ValueError(f"Model '{request.model}' not yet supported via API. Use 'mock'.")
+            raise ValueError(
+                f"Model '{request.model}' is not supported via the REST API. "
+                "Currently only 'mock' is supported here. "
+                f"For real providers use the CLI: "
+                f"'evalkit run data.jsonl --model {request.model}'"
+            )
 
+        # strict=False: the REST API handles errors at the API layer
+        # (HTTP 422 for validation, error status in poll response).
+        # We let the post-hoc audit capture any issues rather than raising.
         experiment = Experiment(
             name=run_id,
             dataset=dataset,
             runner=runner,
+            strict=False,
         )
         result = experiment.run()
 
@@ -146,7 +169,8 @@ def _run_evaluation(run_id: str, request: RunRequest) -> None:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.1.0"}
+    """Liveness check endpoint. Returns version string."""
+    return {"status": "ok", "version": __version__}
 
 
 @app.post("/runs", status_code=202)
@@ -184,6 +208,7 @@ def compare_runs(request: CompareRequest) -> dict[str, Any]:
     from evalkit.metrics.comparison import McNemarTest, WilcoxonTest
 
     def load(run_id: str) -> dict[str, Any]:
+        """Load a completed run result from disk; raise 404 if not found or still running."""
         p = RESULTS_DIR / f"{run_id}.json"
         if not p.exists():
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")

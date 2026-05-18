@@ -260,3 +260,58 @@ def test_from_huggingface_missing_reference_field_raises(monkeypatch):
 
     with pytest.raises(ValueError, match="missing required field"):
         EvalDataset.from_huggingface("squad", split="validation", reference_field="label")
+
+
+# ── to_jsonl ───────────────────────────────────────────────────────────────────
+
+
+def test_to_jsonl_roundtrip(tmp_path):
+    """to_jsonl() followed by from_jsonl() produces an identical dataset."""
+    from evalkit.core.dataset import EvalDataset
+
+    records = [
+        {"id": str(i), "question": f"Q{i}", "label": "yes" if i % 2 == 0 else "no"}
+        for i in range(20)
+    ]
+    original = EvalDataset.from_list(records, reference_field="label")
+
+    out = tmp_path / "data.jsonl"
+    returned = original.to_jsonl(out)
+    assert returned == out
+    assert out.exists()
+
+    reloaded = EvalDataset.from_jsonl(out, reference_field="label")
+    assert len(reloaded) == len(original)
+    assert reloaded.references == original.references
+    assert [e.id for e in reloaded.examples] == [e.id for e in original.examples]
+
+
+def test_to_jsonl_creates_parent_dirs(tmp_path):
+    """to_jsonl() creates parent directories if they don't exist."""
+    from evalkit.core.dataset import EvalDataset
+
+    ds = EvalDataset.from_list([{"id": "1", "q": "Q", "label": "yes"}], reference_field="label")
+    out = tmp_path / "deep" / "nested" / "data.jsonl"
+    ds.to_jsonl(out)
+    assert out.exists()
+
+
+def test_to_jsonl_split_roundtrip(tmp_path):
+    """The primary use case: commit a train/test split to disk."""
+    from evalkit.core.dataset import EvalDataset
+
+    records = [{"id": str(i), "q": f"Q{i}", "label": "a" if i % 3 == 0 else "b"} for i in range(90)]
+    ds = EvalDataset.from_list(records, reference_field="label")
+    train, test = ds.split(test_size=0.2, stratify=True)
+
+    train.to_jsonl(tmp_path / "train.jsonl")
+    test.to_jsonl(tmp_path / "test.jsonl")
+
+    train_loaded = EvalDataset.from_jsonl(tmp_path / "train.jsonl", reference_field="label")
+    test_loaded = EvalDataset.from_jsonl(tmp_path / "test.jsonl", reference_field="label")
+
+    assert len(train_loaded) == len(train)
+    assert len(test_loaded) == len(test)
+    assert set(e.id for e in train_loaded.examples).isdisjoint(
+        set(e.id for e in test_loaded.examples)
+    )

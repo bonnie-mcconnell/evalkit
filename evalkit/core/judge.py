@@ -125,6 +125,7 @@ class StochasticJudge(Judge, ABC):
 
     @property
     def is_stochastic(self) -> bool:
+        """True for all stochastic judges (LLMJudge, SemanticSimilarityJudge)."""
         return True
 
 
@@ -161,6 +162,7 @@ class ExactMatchJudge(DeterministicJudge):
         return text
 
     def judge(self, output: str, reference: Any) -> JudgmentResult:
+        """Score 1.0 if normalised output equals normalised reference, else 0.0."""
         norm_out = self._normalize(str(output))
         norm_ref = self._normalize(str(reference))
         correct = norm_out == norm_ref
@@ -202,6 +204,7 @@ class RegexMatchJudge(DeterministicJudge):
         self.extract_group = extract_group
 
     def judge(self, output: str, reference: Any) -> JudgmentResult:
+        """Score 1.0 if pattern matches; compare extracted group to reference if extract_group set."""
         match = self._pattern.search(output)
         if match is None:
             return JudgmentResult(
@@ -231,6 +234,66 @@ class RegexMatchJudge(DeterministicJudge):
             is_correct=correct,
             raw_output=output,
             reasoning=f"Extracted: '{extracted}', Reference: '{reference}'",
+        )
+
+
+class ContainsJudge(DeterministicJudge):
+    """
+    Judge that scores 1.0 iff the output contains the reference string.
+
+    The most common pattern in LLM evaluation: the model output should include
+    a specific phrase, keyword, or label somewhere in the text. This is more
+    lenient than ExactMatchJudge (which requires exact equality) and simpler
+    than RegexMatchJudge (which requires a pattern).
+
+    Parameters
+    ----------
+    case_sensitive:
+        If False (default), comparison is case-insensitive.
+        If True, the check is exact substring match.
+    strip_whitespace:
+        If True (default), strip leading/trailing whitespace from both
+        output and reference before checking containment.
+
+    Examples
+    --------
+    >>> judge = ContainsJudge()
+    >>> result = judge.judge("The answer is Paris, France.", "Paris")
+    >>> result.is_correct
+    True
+    >>> result = judge.judge("I don't know.", "Paris")
+    >>> result.is_correct
+    False
+    """
+
+    def __init__(
+        self,
+        case_sensitive: bool = False,
+        strip_whitespace: bool = True,
+    ) -> None:
+        """Initialise a ContainsJudge with optional case/whitespace settings."""
+        self.case_sensitive = case_sensitive
+        self.strip_whitespace = strip_whitespace
+
+    def judge(self, output: str, reference: Any) -> JudgmentResult:
+        """Score 1.0 if the reference string appears inside the output, else 0.0."""
+        out = str(output)
+        ref = str(reference)
+
+        if self.strip_whitespace:
+            out = out.strip()
+            ref = ref.strip()
+
+        if not self.case_sensitive:
+            out = out.lower()
+            ref = ref.lower()
+
+        correct = ref in out
+        return JudgmentResult(
+            score=1.0 if correct else 0.0,
+            is_correct=correct,
+            raw_output=output,
+            reasoning=(f"Reference '{reference}' {'found' if correct else 'not found'} in output."),
         )
 
 
@@ -270,11 +333,12 @@ class SemanticSimilarityJudge(StochasticJudge):
             except ImportError:
                 raise ImportError(
                     "sentence-transformers is required for SemanticSimilarityJudge. "
-                    "pip install sentence-transformers"
+                    'Install with: pip install "evalkit-research[semantic]"'
                 ) from None
         return self._model
 
     def judge(self, output: str, reference: Any) -> JudgmentResult:
+        """Score is cosine similarity of sentence embeddings; correct if similarity >= threshold."""
         model = self._get_model()
         embeddings = model.encode([str(output), str(reference)], normalize_embeddings=True)
         similarity = float(np.dot(embeddings[0], embeddings[1]))
@@ -309,14 +373,15 @@ class LLMJudge(StochasticJudge):
         The JSON key in the judge's response that contains the numeric score.
     """
 
-    DEFAULT_SYSTEM_PROMPT = """You are an impartial evaluator assessing the quality of a model's response.  # noqa: E501
-
-Evaluate the response against the reference answer using this rubric:
-- 1.0: Correct and complete. The response matches the reference in substance.
-- 0.5: Partially correct. The response captures some key information but is incomplete or has minor errors.  # noqa: E501
-- 0.0: Incorrect. The response contradicts the reference or is entirely off-topic.
-
-Respond ONLY with a JSON object: {"score": <float>, "reasoning": "<one sentence>"}"""
+    DEFAULT_SYSTEM_PROMPT = (
+        "You are an impartial evaluator assessing the quality of a model's response.\n\n"
+        "Evaluate the response against the reference answer using this rubric:\n"
+        "- 1.0: Correct and complete. The response matches the reference in substance.\n"
+        "- 0.5: Partially correct. The response captures some key information but is "
+        "incomplete or has minor errors.\n"
+        "- 0.0: Incorrect. The response contradicts the reference or is entirely off-topic.\n\n"
+        'Respond ONLY with a JSON object: {"score": <float>, "reasoning": "<one sentence>"}'
+    )
 
     def __init__(
         self,
@@ -331,6 +396,7 @@ Respond ONLY with a JSON object: {"score": <float>, "reasoning": "<one sentence>
         self.reasoning_field = reasoning_field
 
     def judge(self, output: str, reference: Any) -> JudgmentResult:
+        """Call the LLM provider and parse the JSON score/reasoning response."""
         user_prompt = (
             f"Model response:\n{output}\n\nReference answer:\n{reference}\n\nEvaluate the response."
         )

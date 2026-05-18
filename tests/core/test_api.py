@@ -62,8 +62,10 @@ def test_health_returns_ok(client):
 
 
 def test_health_returns_version(client):
+    import evalkit
+
     resp = client.get("/health")
-    assert "version" in resp.json()
+    assert resp.json()["version"] == evalkit.__version__
 
 
 # ── POST /runs ─────────────────────────────────────────────────────────────────
@@ -326,23 +328,6 @@ def test_power_is_adequate_field_present(client):
     assert "is_adequate" in resp.json()
 
 
-def test_compare_with_incomplete_run_returns_400(client):
-    """Comparing against a run that's still running should return 400."""
-    # Start two runs but don't wait for completion
-    _run_and_wait(client, n=30)
-    run_b_resp = client.post("/runs", json=_minimal_request(n=30))
-    run_b_resp.json()["run_id"]
-
-    # Manually write a 'running' status file to simulate incomplete run
-
-    client.app.state if hasattr(client.app, "state") else None
-
-    # Just compare against a fake "running" run by writing the file
-    # We need to access the patched RESULTS_DIR - use the fixture's tmp_path
-    # Find it via the existing run file
-    pass  # Skip this specific case - the background task may complete instantly
-
-
 def test_compare_mismatched_datasets_returns_400(client):
     """Comparing runs with different example IDs should return 400."""
     # Create two runs with different dataset IDs
@@ -395,10 +380,6 @@ def test_compare_with_still_running_run_returns_400(client):
     # Create a fake 'running' result file
     run_b_id = str(uuid.uuid4())
 
-    # We need to write the file into the patched RESULTS_DIR.
-    # The client fixture patches RESULTS_DIR in the app module,
-    # but we can find the directory from the completed run's file.
-    # Instead, use a second patch to intercept the load call.
     with patch("evalkit.api.app.RESULTS_DIR") as mock_dir:
         import pathlib
         import tempfile
@@ -425,3 +406,46 @@ def test_compare_with_still_running_run_returns_400(client):
 
     # Either 400 (run not complete) or 404 (not found in patched dir)
     assert resp.status_code in (400, 404)
+
+
+# ── Input validation ────────────────────────────────────────────────────────────
+
+
+def test_empty_dataset_records_returns_422(client):
+    """Empty dataset_records must be rejected synchronously with 422."""
+    request = _minimal_request()
+    request["dataset_records"] = []
+    resp = client.post("/runs", json=request)
+    assert resp.status_code == 422
+
+
+def test_oversized_dataset_records_returns_422(client):
+    """dataset_records with >10,000 items must be rejected synchronously with 422."""
+    request = _minimal_request()
+    request["dataset_records"] = [{"id": str(i), "label": "a"} for i in range(10_001)]
+    resp = client.post("/runs", json=request)
+    assert resp.status_code == 422
+
+
+def test_n_resamples_too_high_returns_422(client):
+    """n_resamples > 100_000 must be rejected synchronously with 422."""
+    request = _minimal_request()
+    request["n_resamples"] = 100_001
+    resp = client.post("/runs", json=request)
+    assert resp.status_code == 422
+
+
+def test_n_resamples_too_low_returns_422(client):
+    """n_resamples < 100 must be rejected synchronously with 422."""
+    request = _minimal_request()
+    request["n_resamples"] = 99
+    resp = client.post("/runs", json=request)
+    assert resp.status_code == 422
+
+
+def test_mock_accuracy_out_of_range_returns_422(client):
+    """mock_accuracy > 1.0 must be rejected synchronously with 422."""
+    request = _minimal_request()
+    request["mock_accuracy"] = 1.5
+    resp = client.post("/runs", json=request)
+    assert resp.status_code == 422

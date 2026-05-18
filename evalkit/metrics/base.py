@@ -75,6 +75,9 @@ class MetricResult:
             f"({pct}% CI: {self.ci_lower:.4f}–{self.ci_upper:.4f}, n={self.n})"
         )
 
+    def __repr__(self) -> str:
+        return f"MetricResult({self.__str__()})"
+
     @property
     def ci_width(self) -> float:
         """Width of the confidence interval - a direct measure of precision."""
@@ -98,6 +101,11 @@ class Metric(ABC):
     `_point_estimate`, which computes the metric on a single (possibly
     resampled) array pair.
     """
+
+    # Number of resamples to pre-generate in each bootstrap chunk.
+    # Tuned to balance per-call rng overhead against peak memory:
+    # chunk=50, n=1000 → 50 * 1000 * 8 bytes ≈ 400 KB per stratum per chunk.
+    _BOOTSTRAP_CHUNK: int = 50
 
     def __init__(self, ci_level: float = 0.95, n_resamples: int = 10_000, seed: int = 42) -> None:
         if not (0 < ci_level < 1):
@@ -144,16 +152,22 @@ class Metric(ABC):
 
         Stratification ensures that rare-class examples appear in resamples
         in approximately the correct proportion, preventing CI collapse on
-        imbalanced datasets. When `stratify=True`, resampling is done
-        separately within each unique class in `references` and results
+        imbalanced datasets. When ``stratify=True``, resampling is done
+        separately within each unique class in ``references`` and results
         are concatenated.
+
+        Performance: resample indices are pre-generated in chunks of
+        ``_BOOTSTRAP_CHUNK`` resamples at a time. This amortises the per-call
+        overhead of ``rng.choice`` without materialising the full
+        ``(n_resamples × n)`` index matrix, which would be prohibitively
+        large for typical ``n=1000, B=10_000`` runs (~80 MB).
 
         Parameters
         ----------
         predictions, references:
             Aligned arrays of model outputs and ground-truth labels.
         stratify:
-            Whether to resample within strata defined by `references`.
+            Whether to resample within strata defined by ``references``.
             Disable only for regression targets with continuous labels.
 
         Returns
@@ -162,14 +176,32 @@ class Metric(ABC):
         """
         n = len(predictions)
         boot_stats = np.empty(self.n_resamples)
-        class_indices = self._stratify_indices(references) if stratify else None
+        done = 0
 
-        for i in range(self.n_resamples):
-            if class_indices is not None:
-                idx = self._stratified_sample(class_indices)
-            else:
-                idx = self.rng.integers(0, n, size=n)
-            boot_stats[i] = self._point_estimate(predictions[idx], references[idx])
+        if stratify:
+            class_indices = self._stratify_indices(references)
+            while done < self.n_resamples:
+                batch = min(self._BOOTSTRAP_CHUNK, self.n_resamples - done)
+                # Pre-generate this chunk's indices for every stratum at once.
+                # Each entry: shape (batch, stratum_size). Memory ≈ batch*n integers.
+                chunk_idx: dict[Any, np.ndarray] = {
+                    cls: self.rng.choice(idx, size=(batch, len(idx)), replace=True)
+                    for cls, idx in class_indices.items()
+                }
+                for i in range(batch):
+                    idx = np.concatenate([chunk_idx[c][i] for c in class_indices])
+                    boot_stats[done + i] = self._point_estimate(predictions[idx], references[idx])
+                done += batch
+        else:
+            while done < self.n_resamples:
+                batch = min(self._BOOTSTRAP_CHUNK, self.n_resamples - done)
+                # Shape (batch, n) - pre-generate unstratified indices.
+                all_idx = self.rng.integers(0, n, size=(batch, n))
+                for i in range(batch):
+                    boot_stats[done + i] = self._point_estimate(
+                        predictions[all_idx[i]], references[all_idx[i]]
+                    )
+                done += batch
 
         alpha = 1 - self.ci_level
         lower = float(np.percentile(boot_stats, 100 * alpha / 2))
@@ -179,18 +211,6 @@ class Metric(ABC):
     def _stratify_indices(self, references: np.ndarray) -> dict[Any, np.ndarray]:
         """Return a mapping from class label to the indices of that class in references."""
         return {cls: np.where(references == cls)[0] for cls in np.unique(references)}
-
-    def _stratified_sample(self, class_indices: dict[Any, np.ndarray]) -> np.ndarray:
-        """
-        Sample with replacement within each stratum, then concatenate.
-
-        Each stratum is resampled to its original size, preserving marginal
-        class frequencies in expectation across resamples.
-        """
-        parts = []
-        for idx in class_indices.values():
-            parts.append(self.rng.choice(idx, size=len(idx), replace=True))
-        return np.concatenate(parts)
 
     def compute(
         self,

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import random
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -55,6 +56,7 @@ class ProviderResponse:
 
     @property
     def total_tokens(self) -> int:
+        """Sum of input and output tokens for this response."""
         return self.input_tokens + self.output_tokens
 
 
@@ -107,9 +109,12 @@ class ModelProvider(ABC):
                 return response.content
             except Exception as e:
                 last_error = e
-                wait = 2**attempt
+                # Full jitter: random(0, 2^attempt) - avoids thundering herd when
+                # concurrent requests all hit a rate limit simultaneously and
+                # retry at identical intervals. See: https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
+                wait = random.uniform(0, 2**attempt)
                 logger.warning(
-                    "Provider call failed (attempt %d/%d): %s. Retrying in %ds...",
+                    "Provider call failed (attempt %d/%d): %s. Retrying in %.1fs...",
                     attempt + 1,
                     self.max_retries,
                     e,
@@ -198,7 +203,7 @@ class OpenAIProvider(ModelProvider):
     """
     OpenAI API provider.
 
-    Requires: pip install openai evalkit-research[openai]
+    Requires: ``pip install "evalkit-research[openai]"``
 
     Parameters
     ----------
@@ -208,12 +213,16 @@ class OpenAIProvider(ModelProvider):
         OpenAI API key. Defaults to OPENAI_API_KEY env var.
     """
 
-    # Pricing per 1M tokens as of early 2025 (update as needed)
+    # Pricing per 1M tokens (update as needed; see platform.openai.com/docs/pricing)
     _PRICING = {
         "gpt-4o": {"input": 2.50, "output": 10.00},
         "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+        "gpt-4.1": {"input": 2.00, "output": 8.00},
+        "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
         "gpt-4-turbo": {"input": 10.00, "output": 30.00},
         "o1": {"input": 15.00, "output": 60.00},
+        "o3": {"input": 10.00, "output": 40.00},
+        "o4-mini": {"input": 1.10, "output": 4.40},
     }
 
     def __init__(
@@ -228,7 +237,10 @@ class OpenAIProvider(ModelProvider):
 
             self._client = openai.OpenAI(api_key=api_key)
         except ImportError:  # pragma: no cover
-            raise ImportError("openai is required. pip install openai")
+            raise ImportError(
+                "openai is required for OpenAIProvider. "
+                'Install with: pip install "evalkit-research[openai]"'
+            )
 
     def _call(
         self,
@@ -285,7 +297,7 @@ class AnthropicProvider(ModelProvider):
     """
     Anthropic API provider.
 
-    Requires: pip install anthropic evalkit-research[anthropic]
+    Requires: ``pip install "evalkit-research[anthropic]"``
 
     Parameters
     ----------
@@ -295,7 +307,11 @@ class AnthropicProvider(ModelProvider):
         Anthropic API key. Defaults to ANTHROPIC_API_KEY env var.
     """
 
+    # Pricing per 1M tokens (update as needed; see anthropic.com/pricing)
     _PRICING = {
+        "claude-opus-4-5": {"input": 15.00, "output": 75.00},
+        "claude-sonnet-4-5": {"input": 3.00, "output": 15.00},
+        "claude-haiku-4-5": {"input": 0.80, "output": 4.00},
         "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00},
         "claude-3-5-haiku-20241022": {"input": 0.80, "output": 4.00},
         "claude-3-opus-20240229": {"input": 15.00, "output": 75.00},
@@ -303,7 +319,7 @@ class AnthropicProvider(ModelProvider):
 
     def __init__(
         self,
-        model: str = "claude-3-5-haiku-20241022",
+        model: str = "claude-haiku-4-5",
         api_key: str | None = None,
         max_retries: int = 3,
     ) -> None:
@@ -313,7 +329,10 @@ class AnthropicProvider(ModelProvider):
 
             self._client = anthropic.Anthropic(api_key=api_key)
         except ImportError:  # pragma: no cover
-            raise ImportError("anthropic is required. pip install anthropic")
+            raise ImportError(
+                "anthropic is required for AnthropicProvider. "
+                'Install with: pip install "evalkit-research[anthropic]"'
+            )
 
     def _call(
         self,

@@ -10,8 +10,9 @@ from evalkit.analysis.power import PowerAnalysis, PowerResult
 from evalkit.analysis.report import ReportGenerator
 from evalkit.analysis.rigour import AuditFinding, AuditReport, RigorChecker, Severity
 from evalkit.core.dataset import EvalDataset, Example, PromptTemplate
-from evalkit.core.experiment import ComparisonResult, Experiment, ExperimentResult
+from evalkit.core.experiment import ComparisonResult, Experiment, ExperimentResult, PreFlightError
 from evalkit.core.judge import (
+    ContainsJudge,
     DeterministicJudge,
     ExactMatchJudge,
     Judge,
@@ -28,6 +29,8 @@ from evalkit.metrics.accuracy import (
     BLEUScore,
     ExpectedCalibrationError,
     F1Score,
+    PrecisionScore,
+    RecallScore,
     ROUGEScore,
 )
 from evalkit.metrics.agreement import AgreementResult, CohenKappa, KrippendorffAlpha
@@ -46,16 +49,21 @@ from evalkit.providers.base import MockProvider, ModelProvider, ProviderResponse
 #   from evalkit import OpenAIProvider
 # and get a clear ImportError if they haven't run pip install evalkit-research[openai].
 try:
-    from evalkit.providers.base import OpenAIProvider
+    from evalkit.providers.base import OpenAIProvider  # noqa: F401
 except ImportError:  # pragma: no cover
     pass  # openai not installed; OpenAIProvider not available
 
 try:
-    from evalkit.providers.base import AnthropicProvider
+    from evalkit.providers.base import AnthropicProvider  # noqa: F401
 except ImportError:  # pragma: no cover
     pass  # anthropic not installed; AnthropicProvider not available
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version as _version
+
+    __version__ = _version("evalkit-research")
+except Exception:  # pragma: no cover
+    __version__ = "unknown"
 
 __all__ = [
     # core
@@ -65,12 +73,14 @@ __all__ = [
     "Experiment",
     "ExperimentResult",
     "ComparisonResult",
+    "PreFlightError",
     "Judge",
     "DeterministicJudge",
     "StochasticJudge",
     "JudgmentResult",
     "ExactMatchJudge",
     "RegexMatchJudge",
+    "ContainsJudge",
     "LLMJudge",
     "SemanticSimilarityJudge",
     "AsyncRunner",
@@ -89,6 +99,8 @@ __all__ = [
     "Accuracy",
     "BalancedAccuracy",
     "F1Score",
+    "PrecisionScore",
+    "RecallScore",
     "BLEUScore",
     "ROUGEScore",
     "ExpectedCalibrationError",

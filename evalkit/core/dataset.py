@@ -159,6 +159,7 @@ class EvalDataset:
         self.examples = examples
         self.name = name
         self._validate_unique_ids()
+        self._label_distribution_cache: dict[str, int] | None = None
 
     def _validate_unique_ids(self) -> None:
         ids = [e.id for e in self.examples]
@@ -168,6 +169,11 @@ class EvalDataset:
 
     def __len__(self) -> int:
         return len(self.examples)
+
+    def __repr__(self) -> str:
+        dist = self.label_distribution()
+        dist_str = ", ".join(f"{k}:{v}" for k, v in sorted(dist.items()))
+        return f"EvalDataset(name={self.name!r}, n={len(self)}, labels={{{dist_str}}})"
 
     def __iter__(self) -> Iterator[Example]:
         return iter(self.examples)
@@ -189,14 +195,20 @@ class EvalDataset:
         """
         Count of each unique reference label.
 
+        Result is cached - subsequent calls are O(1). The cache is computed
+        on first access and reused for ``__repr__``, ``RigorChecker``, and
+        ``split(stratify=True)``.
+
         Useful for detecting class imbalance before running evaluations.
         Only meaningful for classification tasks with discrete labels.
         """
-        dist: dict[str, int] = {}
-        for ref in self.references:
-            key = str(ref)
-            dist[key] = dist.get(key, 0) + 1
-        return dist
+        if self._label_distribution_cache is None:
+            dist: dict[str, int] = {}
+            for ref in self.references:
+                key = str(ref)
+                dist[key] = dist.get(key, 0) + 1
+            self._label_distribution_cache = dist
+        return self._label_distribution_cache
 
     @classmethod
     def from_jsonl(
@@ -321,7 +333,10 @@ class EvalDataset:
         try:
             from datasets import load_dataset
         except ImportError:
-            raise ImportError("datasets is required. pip install datasets")
+            raise ImportError(
+                "datasets is required for from_huggingface(). "
+                'Install with: pip install "evalkit-research[huggingface]"'
+            )
 
         logger.info("Loading %s/%s from HuggingFace...", dataset_name, split)
         hf_dataset = load_dataset(dataset_name, split=split)
@@ -474,3 +489,45 @@ class EvalDataset:
         rng = _random.Random(seed)
         sampled = rng.sample(self.examples, n)
         return EvalDataset(sampled, name=f"{self.name}_sample{n}")
+
+    def to_jsonl(self, path: str | Path, reference_field: str = "label") -> Path:
+        """
+        Save the dataset to a JSONL file.
+
+        The inverse of ``from_jsonl``. Each line is a JSON object with the
+        example's ``id`` field, all ``input_fields``, and the reference stored
+        under ``reference_field``.
+
+        This makes it straightforward to commit a train/test split to disk::
+
+            train, test = dataset.split(test_size=0.2, stratify=True)
+            train.to_jsonl("data/train.jsonl")
+            test.to_jsonl("data/test.jsonl")
+
+        Parameters
+        ----------
+        path:
+            Destination file path. Parent directories are created if they
+            do not exist.
+        reference_field:
+            Name of the field to use for the reference label in the saved JSON.
+            Should match the ``reference_field`` you'll pass to ``from_jsonl``
+            when reloading. Default ``"label"``.
+
+        Returns
+        -------
+        The resolved path of the saved file.
+        """
+        import json
+
+        dest = Path(path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        with dest.open("w", encoding="utf-8") as f:
+            for ex in self.examples:
+                record: dict[str, Any] = {"id": ex.id}
+                record.update(ex.input_fields)
+                record[reference_field] = ex.reference
+                f.write(json.dumps(record) + "\n")
+
+        return dest

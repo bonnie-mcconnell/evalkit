@@ -66,6 +66,7 @@ class PowerResult:
 
     @property
     def is_adequate(self) -> bool:
+        """True if achieved power meets or exceeds the desired power target."""
         if self.achieved_power is None:
             return True  # Just a planning calculation, not an audit
         return self.achieved_power >= self.desired_power
@@ -421,10 +422,23 @@ class PowerAnalysis:
         if test in ("proportion", "ci"):
             lines.append(f"Baseline accuracy: {baseline_accuracy:.2f}")
         if test == "ci":
+            # CI width depends only on α and n, not on power - the power parameter
+            # is irrelevant here. Show a single-column table with a clear explanation.
             lines.append(
-                "Note: CI width depends only on α and n, not on power. "
-                "Columns are identical - shown for reference."
+                "Note: CI width depends only on α and n (not power). "
+                "The table shows required N for the desired half-width at each precision level."
             )
+            lines.append("")
+            lines.append(f"{'Desired ±':>12} │ {'Min N':>8}")
+            lines.append("─" * 12 + "─┼─" + "─" * 9)
+            pa_default = PowerAnalysis(alpha=self.alpha, power=self.power)
+            for es in effect_sizes:
+                r = pa_default.for_ci_precision(es, expected_accuracy=baseline_accuracy)
+                lines.append(f"{'±' + f'{int(es * 100)}%':>12} │ {r.minimum_n:>8,}")
+            table = "\n".join(lines)
+            if print_table:
+                print(table)
+            return table
         lines.append("")
 
         label_width = 12

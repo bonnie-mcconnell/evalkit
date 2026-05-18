@@ -235,3 +235,50 @@ def test_achieved_power_check_passes_when_adequate(checker):
     report = checker.audit(n_examples=2000, accuracy=0.75)
     power_findings = [f for f in report.findings if f.code == "UNDERPOWERED_COMPARISON"]
     assert len(power_findings) == 0
+
+
+def test_audit_report_str_pass_with_warnings_shows_count():
+    """
+    When an audit has warnings but no errors, __str__ must say
+    'PASS (N warning(s))' not just 'PASS'. A plain 'PASS' label
+    when warnings are present is misleading - users will stop reading.
+    """
+    from evalkit.analysis.rigour import AuditFinding, AuditReport, Severity
+
+    findings = [
+        AuditFinding("WARN_A", Severity.WARNING, "a warning", "fix it"),
+    ]
+    report = AuditReport(findings=findings, experiment_name="test")
+    s = str(report)
+    assert "PASS" in s
+    assert "FAIL" not in s
+    assert "1 warning" in s, f"Expected '1 warning' in PASS-with-warnings output, got:\n{s}"
+
+
+def test_audit_report_str_clean_pass_has_no_warning_count():
+    """
+    A truly clean audit (no findings at all) should say the concise
+    'No issues found' message, not a verbose count.
+    """
+    from evalkit.analysis.rigour import AuditReport
+
+    report = AuditReport(findings=[], experiment_name="test")
+    s = str(report)
+    assert "No issues" in s
+    assert "warning" not in s
+    assert "error" not in s
+
+
+def test_audit_report_pass_with_warnings_adds_review_note():
+    """
+    A PASS-with-warnings report should end with a note telling the user
+    to review the warnings before reporting - not silently show 'PASS'.
+    """
+    from evalkit.analysis.rigour import AuditFinding, AuditReport, Severity
+
+    findings = [
+        AuditFinding("WARN_B", Severity.WARNING, "underpowered comparison", "increase N"),
+    ]
+    report = AuditReport(findings=findings, experiment_name="test")
+    s = str(report)
+    assert "Review the warnings" in s or "review" in s.lower()

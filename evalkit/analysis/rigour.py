@@ -95,27 +95,39 @@ class AuditReport:
 
     @property
     def passed(self) -> bool:
+        """True if no ERROR-severity findings exist. Warnings do not fail the audit."""
         return not any(f.severity == Severity.ERROR for f in self.findings)
 
     @property
     def errors(self) -> list[AuditFinding]:
+        """All ERROR-severity findings. An experiment with errors should not be reported."""
         return [f for f in self.findings if f.severity == Severity.ERROR]
 
     @property
     def warnings(self) -> list[AuditFinding]:
+        """All WARNING-severity findings. Warrant attention but do not fail the audit."""
         return [f for f in self.findings if f.severity == Severity.WARNING]
 
     def __str__(self) -> str:
         if not self.findings:
             return "✅ RigorChecker: No issues found. Experiment appears statistically sound."
 
+        if not self.passed:
+            status = "FAIL"
+        elif self.warnings:
+            n = len(self.warnings)
+            status = f"PASS ({n} warning{'s' if n != 1 else ''})"
+        else:  # pragma: no cover - only fires with INFO-only findings
+            status = "PASS"
+
         lines = [
             "╔══════════════════════════════════════════════════════╗",
             "║           evalkit  RigorChecker  Report              ║",
             "╚══════════════════════════════════════════════════════╝",
             f"Experiment: {self.experiment_name}",
-            f"Status: {'PASS' if self.passed else 'FAIL'}  "
-            f"({len(self.errors)} errors, {len(self.warnings)} warnings)",
+            f"Status: {status}  "
+            f"({len(self.errors)} error{'s' if len(self.errors) != 1 else ''}, "
+            f"{len(self.warnings)} warning{'s' if len(self.warnings) != 1 else ''})",
             "",
         ]
 
@@ -128,6 +140,8 @@ class AuditReport:
                 "⚠  Results from this experiment should not be reported without "
                 "addressing the ERROR-level findings above."
             )
+        elif self.warnings:
+            lines.append("⚠  Review the warnings above before reporting results.")
 
         return "\n".join(lines)
 
@@ -163,6 +177,7 @@ class RigorChecker:
         min_judge_agreement: float = MIN_ACCEPTABLE_KAPPA,
     ) -> None:
         self.power = PowerAnalysis(alpha=power_alpha, power=desired_power)
+        self.power_alpha = power_alpha  # stored for use in multiple-testing checks
         self.desired_power = desired_power
         self.min_n = min_n
         self.min_judge_agreement = min_judge_agreement
@@ -453,15 +468,16 @@ class RigorChecker:
         return []
 
     def _check_multiple_testing_design(self, n_variants: int) -> list[AuditFinding]:
-        expected_fp = n_variants * 0.05
-        prob_at_least_one_fp = 1 - (1 - 0.05) ** n_variants
+        alpha = self.power_alpha
+        expected_fp = n_variants * alpha
+        prob_at_least_one_fp = 1 - (1 - alpha) ** n_variants
 
         return [
             AuditFinding(
                 code="MULTIPLE_TESTING_RISK",
                 severity=Severity.WARNING,
                 message=(
-                    f"You are comparing {n_variants} variants. At α=0.05, the probability "
+                    f"You are comparing {n_variants} variants. At α={alpha:.2f}, the probability "
                     f"of at least one false positive is {prob_at_least_one_fp:.0%}, "
                     f"and you'd expect {expected_fp:.1f} false discoveries under H0."
                 ),
@@ -476,7 +492,8 @@ class RigorChecker:
     def _check_multiple_testing_results(
         self, n_variants: int, p_values: list[float]
     ) -> list[AuditFinding]:
-        bh = BHCorrection(alpha=0.05)
+        alpha = self.power_alpha
+        bh = BHCorrection(alpha=alpha)
         result = bh.correct(p_values)
 
         findings = []
@@ -484,7 +501,7 @@ class RigorChecker:
             n_changed = sum(
                 1
                 for raw, adj_reject in zip(result.unadjusted_p_values, result.reject_null)
-                if raw < 0.05 and not adj_reject
+                if raw < alpha and not adj_reject
             )
             findings.append(
                 AuditFinding(

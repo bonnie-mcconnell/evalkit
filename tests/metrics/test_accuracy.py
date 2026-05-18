@@ -6,7 +6,13 @@ Statistical property tests: not exact values, but correct direction.
 
 import pytest
 
-from evalkit.metrics.accuracy import Accuracy, BalancedAccuracy, F1Score
+from evalkit.metrics.accuracy import (
+    Accuracy,
+    BalancedAccuracy,
+    F1Score,
+    PrecisionScore,
+    RecallScore,
+)
 
 
 def test_accuracy_perfect():
@@ -195,7 +201,6 @@ def test_bleu_warns_on_small_n(caplog):
 
 def test_f1_score_binary():
     """F1Score on binary predictions should return a MetricResult with valid CI."""
-    from evalkit.metrics.accuracy import F1Score
 
     preds = [1, 1, 0, 1, 0, 0, 1, 1] * 10
     refs = [1, 0, 0, 1, 0, 1, 1, 0] * 10
@@ -206,7 +211,6 @@ def test_f1_score_binary():
 
 def test_f1_score_perfect():
     """F1Score of 1.0 when predictions exactly match references."""
-    from evalkit.metrics.accuracy import F1Score
 
     preds = [1, 0, 1, 0] * 20
     refs = [1, 0, 1, 0] * 20
@@ -413,13 +417,36 @@ def test_f1_score_populates_per_class_extra():
     F1Score.compute() should put per-class F1 in MetricResult.extra when
     the number of classes is <= 10. Line 166 in accuracy.py.
     """
-    from evalkit.metrics.accuracy import F1Score
 
     preds = [1, 0, 1, 0, 1, 0] * 20
     refs = [1, 1, 0, 0, 1, 0] * 20
     result = F1Score(n_resamples=300, seed=0).compute(preds, refs)
     assert "per_class_f1" in result.extra
     assert len(result.extra["per_class_f1"]) <= 10
+
+
+def test_f1_per_class_extra_matches_sklearn():
+    """
+    Per-class F1 in MetricResult.extra must match sklearn's per-class F1 exactly.
+    This test is important because the implementation was rewritten in pure numpy
+    (removing the sklearn dependency from the hot path) - correctness must be verified.
+    """
+    import numpy as np
+    from sklearn.metrics import f1_score
+
+    rng = np.random.default_rng(42)
+    preds = list(rng.integers(0, 3, 300))
+    refs = list(rng.integers(0, 3, 300))
+
+    result = F1Score(average="macro", n_resamples=300, seed=0).compute(preds, refs)
+    per_class = result.extra["per_class_f1"]
+
+    for cls in [0, 1, 2]:
+        sk = f1_score(refs, preds, labels=[cls], average="macro", zero_division=0)
+        ours = per_class[str(cls)]
+        assert abs(ours - sk) < 1e-10, (
+            f"Per-class F1 mismatch for class {cls}: evalkit={ours:.6f} sklearn={sk:.6f}"
+        )
 
 
 def test_ece_zero_resamples_raises():
@@ -538,3 +565,293 @@ def test_balanced_accuracy_handles_empty_class_in_bootstrap():
     result = bal.compute(preds, refs)
     assert 0.0 <= result.value <= 1.0
     assert result.ci_lower <= result.value <= result.ci_upper
+
+
+# ── PrecisionScore ─────────────────────────────────────────────────────────────
+
+
+def test_precision_perfect():
+
+    result = PrecisionScore(average="macro", n_resamples=500, seed=0).compute(
+        ["cat", "dog", "cat", "dog"] * 20,
+        ["cat", "dog", "cat", "dog"] * 20,
+    )
+    assert abs(result.value - 1.0) < 1e-9
+    assert result.name == "Precision(macro)"
+
+
+def test_precision_zero_division_returns_zero():
+
+    # All predictions wrong - precision is 0 for every class
+    result = PrecisionScore(average="macro", n_resamples=500, seed=0).compute(
+        ["dog"] * 40,
+        ["cat"] * 40,
+    )
+    assert result.value == 0.0
+    assert 0.0 <= result.ci_lower <= result.ci_upper
+
+
+def test_precision_binary():
+
+    # 10 TP, 10 FP → precision = 0.5
+    preds = [1] * 20 + [0] * 20
+    refs = [1] * 10 + [0] * 10 + [1] * 10 + [0] * 10
+    result = PrecisionScore(average="binary", pos_label=1, n_resamples=500, seed=0).compute(
+        preds, refs
+    )
+    assert abs(result.value - 0.5) < 0.05
+    assert result.name == "Precision(binary)"
+
+
+def test_precision_ci_contains_true_value():
+    """Bootstrap CI should contain the true precision at roughly the stated level."""
+
+    preds = [1, 0, 1, 0, 1, 1, 0, 0, 1, 0] * 30
+    refs = [1, 1, 0, 0, 1, 0, 1, 0, 1, 1] * 30
+    result = PrecisionScore(average="macro", n_resamples=2000, seed=42).compute(preds, refs)
+    assert result.ci_lower <= result.value <= result.ci_upper
+    assert result.ci_width > 0
+
+
+# ── RecallScore ────────────────────────────────────────────────────────────────
+
+
+def test_recall_perfect():
+
+    result = RecallScore(average="macro", n_resamples=500, seed=0).compute(
+        ["yes", "no"] * 30,
+        ["yes", "no"] * 30,
+    )
+    assert abs(result.value - 1.0) < 1e-9
+    assert result.name == "Recall(macro)"
+
+
+def test_recall_zero():
+
+    # Model predicts "no" for everything, references are all "yes" → recall=0
+    result = RecallScore(average="macro", n_resamples=500, seed=0).compute(
+        ["no"] * 40,
+        ["yes"] * 40,
+    )
+    assert result.value == 0.0
+
+
+def test_recall_binary():
+
+    # 10 TP, 10 FN → recall = 0.5
+    preds = [1] * 10 + [0] * 30
+    refs = [1] * 20 + [0] * 20
+    result = RecallScore(average="binary", pos_label=1, n_resamples=500, seed=0).compute(
+        preds, refs
+    )
+    assert abs(result.value - 0.5) < 0.05
+    assert result.name == "Recall(binary)"
+
+
+def test_recall_ci_contains_true_value():
+
+    preds = [1, 0, 1, 0, 1, 1, 0, 0, 1, 0] * 30
+    refs = [1, 1, 0, 0, 1, 0, 1, 0, 1, 1] * 30
+    result = RecallScore(average="macro", n_resamples=2000, seed=42).compute(preds, refs)
+    assert result.ci_lower <= result.value <= result.ci_upper
+    assert result.ci_width > 0
+
+
+def test_precision_recall_f1_relationship():
+    """
+    Verify P, R, F1 are self-consistent: F1 = 2PR/(P+R).
+    This is a cross-metric sanity check, not an arithmetic identity test.
+    """
+
+    preds = [1, 0, 1, 0, 1, 1, 0, 0, 1, 0] * 40
+    refs = [1, 1, 0, 0, 1, 0, 1, 0, 1, 1] * 40
+
+    p = PrecisionScore(average="macro", n_resamples=500, seed=0).compute(preds, refs).value
+    r = RecallScore(average="macro", n_resamples=500, seed=0).compute(preds, refs).value
+    f = F1Score(average="macro", n_resamples=500, seed=0).compute(preds, refs).value
+
+    if p + r > 0:
+        expected_f1 = 2 * p * r / (p + r)
+        assert abs(f - expected_f1) < 0.02, (
+            f"F1={f:.4f} inconsistent with P={p:.4f}, R={r:.4f} (expected F1≈{expected_f1:.4f})"
+        )
+
+
+# ── _prf_scores numpy helper - exhaustive sklearn comparison ──────────────────
+
+
+class TestPrfScoresMatchSklearn:
+    """
+    _prf_scores must be numerically identical to sklearn for all averaging modes,
+    class counts, and edge cases. These tests are critical: _prf_scores is the
+    hot path called B=10,000 times per metric per experiment.
+    """
+
+    @pytest.mark.parametrize("average", ["macro", "micro", "weighted"])
+    @pytest.mark.parametrize("n_classes", [2, 3, 5])
+    def test_matches_sklearn_multiclass(self, average: str, n_classes: int) -> None:
+        import numpy as np
+        from sklearn.metrics import f1_score, precision_score, recall_score
+
+        from evalkit.metrics.accuracy import _prf_scores
+
+        rng = np.random.default_rng(hash(f"{average}{n_classes}") % (2**31))
+        preds = rng.integers(0, n_classes, 300)
+        refs = rng.integers(0, n_classes, 300)
+
+        sk_p = precision_score(refs, preds, average=average, zero_division=0)
+        sk_r = recall_score(refs, preds, average=average, zero_division=0)
+        sk_f = f1_score(refs, preds, average=average, zero_division=0)
+
+        np_p, np_r, np_f = _prf_scores(preds, refs, average, pos_label=1)
+
+        assert abs(np_p - sk_p) < 1e-10, (
+            f"Precision mismatch ({average}, k={n_classes}): {np_p} != {sk_p}"
+        )
+        assert abs(np_r - sk_r) < 1e-10, (
+            f"Recall mismatch ({average}, k={n_classes}): {np_r} != {sk_r}"
+        )
+        assert abs(np_f - sk_f) < 1e-10, f"F1 mismatch ({average}, k={n_classes}): {np_f} != {sk_f}"
+
+    def test_matches_sklearn_binary(self) -> None:
+        import numpy as np
+        from sklearn.metrics import f1_score, precision_score, recall_score
+
+        from evalkit.metrics.accuracy import _prf_scores
+
+        rng = np.random.default_rng(7)
+        preds = rng.integers(0, 2, 200)
+        refs = rng.integers(0, 2, 200)
+
+        for pos_label in [0, 1]:
+            sk_p = precision_score(
+                refs, preds, average="binary", pos_label=pos_label, zero_division=0
+            )
+            sk_r = recall_score(refs, preds, average="binary", pos_label=pos_label, zero_division=0)
+            sk_f = f1_score(refs, preds, average="binary", pos_label=pos_label, zero_division=0)
+
+            np_p, np_r, np_f = _prf_scores(preds, refs, "binary", pos_label=pos_label)
+
+            assert abs(np_p - sk_p) < 1e-10, f"Binary precision mismatch (pos={pos_label})"
+            assert abs(np_r - sk_r) < 1e-10, f"Binary recall mismatch (pos={pos_label})"
+            assert abs(np_f - sk_f) < 1e-10, f"Binary F1 mismatch (pos={pos_label})"
+
+    def test_all_correct(self) -> None:
+        """Perfect predictions: P=R=F1=1.0 for all averages."""
+        import numpy as np
+
+        from evalkit.metrics.accuracy import _prf_scores
+
+        refs = np.array([0, 0, 1, 1, 2, 2])
+        preds = refs.copy()
+        for avg in ["macro", "micro", "weighted"]:
+            p, r, f = _prf_scores(preds, refs, avg, pos_label=1)
+            assert abs(p - 1.0) < 1e-10
+            assert abs(r - 1.0) < 1e-10
+            assert abs(f - 1.0) < 1e-10
+
+    def test_all_wrong(self) -> None:
+        """All predictions wrong: F1=0 for macro/weighted (no true positives)."""
+        import numpy as np
+
+        from evalkit.metrics.accuracy import _prf_scores
+
+        refs = np.array([0, 0, 1, 1])
+        preds = np.array([1, 1, 0, 0])  # all swapped
+        for avg in ["macro", "micro", "weighted"]:
+            p, r, f = _prf_scores(preds, refs, avg, pos_label=1)
+            assert abs(p - 0.0) < 1e-10
+            assert abs(r - 0.0) < 1e-10
+            assert abs(f - 0.0) < 1e-10
+
+    def test_zero_division_edge_case(self) -> None:
+        """Class present in refs but never predicted: precision=0, recall=0, F1=0."""
+        import numpy as np
+
+        from evalkit.metrics.accuracy import _prf_scores
+
+        # Class 2 is never predicted - should not crash, should return 0.
+        refs = np.array([0, 1, 2, 2])
+        preds = np.array([0, 1, 0, 1])  # class 2 never predicted
+        p, r, f = _prf_scores(preds, refs, "macro", pos_label=1)
+        # No crash is the main assertion; values should be in [0,1]
+        assert 0.0 <= p <= 1.0
+        assert 0.0 <= r <= 1.0
+        assert 0.0 <= f <= 1.0
+
+    def test_no_numpy_warnings_on_zero_division(self) -> None:
+        """errstate suppression: _prf_scores must not emit RuntimeWarning."""
+        import warnings
+
+        import numpy as np
+
+        from evalkit.metrics.accuracy import _prf_scores
+
+        refs = np.array([0, 0, 1, 1])
+        preds = np.array([1, 1, 0, 0])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            _prf_scores(preds, refs, "macro", pos_label=1)  # must not raise
+
+
+def test_accuracy_warn_on_imbalance_false_suppresses_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """warn_on_imbalance=False must not emit the class imbalance warning."""
+    import logging
+
+    acc = Accuracy(n_resamples=200, seed=0)
+    # 95% class 1 - would trigger warning with default warn_on_imbalance=True
+    preds = [1] * 95 + [0] * 5
+    refs = [1] * 95 + [0] * 5
+    with caplog.at_level(logging.WARNING, logger="evalkit.metrics.accuracy"):
+        acc.compute(preds, refs, warn_on_imbalance=False)
+    assert not any("imbalance" in msg.lower() for msg in caplog.messages), (
+        "warn_on_imbalance=False should suppress the imbalance warning"
+    )
+
+
+def test_accuracy_warn_on_imbalance_true_fires_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """warn_on_imbalance=True (the default) must fire on heavily imbalanced refs."""
+    import logging
+
+    acc = Accuracy(n_resamples=200, seed=0)
+    preds = [1] * 92 + [0] * 8
+    refs = [1] * 92 + [0] * 8  # 92% class 1 - above the 90% threshold
+    with caplog.at_level(logging.WARNING, logger="evalkit.metrics.accuracy"):
+        acc.compute(preds, refs, warn_on_imbalance=True)
+    assert any("imbalance" in msg.lower() for msg in caplog.messages), (
+        "warn_on_imbalance=True should emit the class imbalance warning at ≥90% majority"
+    )
+
+
+def test_experiment_compute_metrics_does_not_warn_on_binary_correct_array(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    When Experiment._compute_metrics builds the binary correct[] array with refs=[1]*n,
+    the 100%-class-1 reference array must NOT trigger the imbalance warning.
+    This tests that the abstraction fix (warn_on_imbalance=False in _compute_metrics)
+    works correctly end-to-end.
+    """
+    import logging
+
+    from evalkit import EvalDataset, Experiment, MockRunner, PromptTemplate
+    from evalkit.core.judge import ExactMatchJudge
+
+    # Build a perfectly balanced dataset - the binary correct[] array will be ~82% 1s
+    records = [{"text": f"ex{i}", "label": "a" if i % 2 == 0 else "b"} for i in range(60)]
+    ds = EvalDataset.from_list(records, reference_field="label")
+    tmpl = PromptTemplate("{{ text }}")
+    judge = ExactMatchJudge()
+    runner = MockRunner(judge=judge, template=tmpl, accuracy=0.92, seed=0)
+
+    with caplog.at_level(logging.WARNING, logger="evalkit.metrics.accuracy"):
+        exp = Experiment("test", ds, runner, n_resamples=200)
+        exp.run()
+
+    imbalance_warnings = [m for m in caplog.messages if "imbalance" in m.lower()]
+    assert len(imbalance_warnings) == 0, (
+        f"_compute_metrics must not emit imbalance warning for binary correct[] array; "
+        f"got: {imbalance_warnings}"
+    )

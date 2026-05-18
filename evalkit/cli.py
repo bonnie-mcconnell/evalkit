@@ -37,7 +37,13 @@ app = typer.Typer(
     help="Rigorous LLM evaluation: bootstrap CIs, significance testing, automated auditing.",
     add_completion=False,
 )
-console = Console()
+
+# All human-readable output (status, progress, Rich tables) goes to stderr.
+# This keeps stdout clean for machine-readable output (--format json).
+# When format=text, stderr and stdout both go to the terminal so the user
+# sees everything. When format=json and the user pipes to jq, stderr still
+# goes to the terminal and stdout is pure JSON.
+console = Console(stderr=True)
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
@@ -61,7 +67,10 @@ def run(
         "exact",
         "--judge",
         "-j",
-        help="Judge type: exact, regex, or llm. llm requires a real --model (gpt-* or claude-*).",
+        help=(
+            "Judge type: exact, contains, regex, or llm. "
+            "llm requires a real --model (gpt-* or claude-*)."
+        ),
     ),
     regex_pattern: str | None = typer.Option(
         None, "--regex", help="Regex pattern for regex judge."
@@ -81,7 +90,26 @@ def run(
     mock_accuracy: float = typer.Option(
         0.82, "--mock-accuracy", help="Accuracy for mock model (demo)."
     ),  # noqa: E501
-    api_key: str | None = typer.Option(None, "--api-key", envvar="OPENAI_API_KEY"),
+    api_key: str | None = typer.Option(
+        None,
+        "--api-key",
+        help="API key. For OpenAI models: also reads OPENAI_API_KEY. "
+        "For Anthropic models: also reads ANTHROPIC_API_KEY.",
+    ),
+    fail_on_errors: bool = typer.Option(
+        False,
+        "--fail-on-errors",
+        help="Exit with code 1 if the RigorChecker audit finds ERROR-level findings. "
+        "Useful for CI pipelines: gates deployment on statistical quality.",
+    ),
+    no_strict: bool = typer.Option(
+        False,
+        "--no-strict",
+        help="Disable strict pre-flight mode. By default, pre-flight ERROR findings "
+        "(e.g. SAMPLE_TOO_SMALL) abort the run before any API calls are made. "
+        "--no-strict overrides this and runs anyway, relying on the post-hoc audit instead. "
+        "Use when you know the issues and want results anyway.",
+    ),
 ) -> None:
     """
     Run an evaluation on a JSONL dataset and produce a tearsheet with CIs.
@@ -91,10 +119,9 @@ def run(
       evalkit run data.jsonl --model gpt-4o-mini --judge llm --template "Q: {{ question }}"
       evalkit run data.jsonl --model gpt-4o-mini --format json | jq .metrics.Accuracy.value
     """
-    from evalkit.analysis.report import ReportGenerator
     from evalkit.core.dataset import EvalDataset, PromptTemplate
     from evalkit.core.experiment import Experiment
-    from evalkit.core.judge import ExactMatchJudge, LLMJudge, RegexMatchJudge
+    from evalkit.core.judge import ContainsJudge, ExactMatchJudge, LLMJudge, RegexMatchJudge
     from evalkit.core.runner import AsyncRunner, MockRunner
 
     if format not in ("text", "json"):
@@ -113,9 +140,11 @@ def run(
 
     # Build judge. For --judge llm the judge object is replaced after the
     # provider is constructed (we need the provider reference). Use a sentinel.
-    judge_obj: ExactMatchJudge | RegexMatchJudge | LLMJudge
+    judge_obj: ExactMatchJudge | ContainsJudge | RegexMatchJudge | LLMJudge
     if judge == "exact":
         judge_obj = ExactMatchJudge()
+    elif judge == "contains":
+        judge_obj = ContainsJudge()
     elif judge == "regex":
         if not regex_pattern:
             console.print("[red]--regex is required when --judge=regex[/red]")
@@ -129,7 +158,7 @@ def run(
             raise typer.Exit(1)
         judge_obj = ExactMatchJudge()  # placeholder - replaced below once provider is built
     else:
-        console.print(f"[red]Unknown judge type '{judge}'. Use: exact, regex, llm[/red]")
+        console.print(f"[red]Unknown judge type '{judge}'. Use: exact, contains, regex, llm[/red]")
         raise typer.Exit(1)
 
     prompt_template = PromptTemplate(template)
@@ -169,7 +198,7 @@ def run(
     elif model.startswith("claude"):
         from evalkit.providers.base import AnthropicProvider
 
-        provider = AnthropicProvider(model=model)
+        provider = AnthropicProvider(model=model, api_key=api_key)
         runner = AsyncRunner(
             provider=provider,
             judge=judge_obj,
@@ -179,7 +208,8 @@ def run(
         )
     else:
         console.print(
-            f"[red]Unknown model '{model}'. Use: mock, gpt-4o, gpt-4o-mini, claude-*[/red]"
+            f"[red]Unknown model '{model}'. Supported prefixes: mock, gpt-*, claude-*[/red]\n"
+            "[dim]Example: --model gpt-4o-mini  or  --model claude-3-5-sonnet-20241022[/dim]"
         )  # noqa: E501
         raise typer.Exit(1)
 
@@ -198,15 +228,27 @@ def run(
         )
 
     # Run experiment
+    # strict=True (default): pre-flight ERRORs raise PreFlightError before any
+    # API calls are made. --no-strict overrides this for when you want results
+    # despite known issues (e.g. small demo dataset).
+    from evalkit.core.experiment import PreFlightError
+
     experiment = Experiment(
         name=f"{ds.name}_{model}",
         dataset=ds,
         runner=runner,
         n_resamples=n_resamples,
+        strict=not no_strict,
     )
 
-    with console.status("[cyan]Running evaluation..."):
-        result = experiment.run()
+    try:
+        with console.status("[cyan]Running evaluation..."):
+            result = experiment.run()
+    except PreFlightError as e:
+        console.print("\n[red bold]✗ Pre-flight audit FAILED - experiment aborted[/red bold]")
+        console.print(str(e.audit))
+        console.print("\n[dim]Fix the issues above, or pass --no-strict to run anyway.[/dim]")
+        raise typer.Exit(1) from None
 
     if format == "json":
         run = result.run_result
@@ -249,8 +291,7 @@ def run(
 
         # Write report
         if output:
-            rpt = ReportGenerator()
-            rpt.generate(result, output_path=output)
+            result.generate_report(path=output)
             console.print(f"\n[green]✓[/green] Report written to [bold]{output}[/bold]")
         else:
             suggested = dataset.stem + "_report.html"
@@ -260,27 +301,39 @@ def run(
 
     # Save results JSON for use with evalkit compare
     if save_results:
-        run = result.run_result
-        save_payload = {
-            "model": run.model,
-            "dataset": run.dataset_name,
-            "n": run.n,
-            "example_ids": run.example_ids,
-            "correct": run.correct,
-            "scores": run.scores,
-        }
-        save_results.write_text(json.dumps(save_payload, indent=2))
+        result.save(save_results)
         console.print(f"[green]✓[/green] Run results saved to [bold]{save_results}[/bold]")
+
+    # CI gate: exit 1 if audit has errors and --fail-on-errors is set
+    if fail_on_errors and result.posthoc_audit.errors:
+        n_errors = len(result.posthoc_audit.errors)
+        console.print(
+            f"\n[red]✗ Exiting with code 1: audit found {n_errors} error(s). "
+            "Use --no-fail-on-errors to suppress.[/red]"
+        )
+        raise typer.Exit(1)
 
 
 @app.command()
 def compare(
-    result_a: Path = typer.Argument(..., help="First run result JSON file."),
-    result_b: Path = typer.Argument(..., help="Second run result JSON file."),
+    result_a: Path = typer.Argument(..., help="First run result JSON file (baseline)."),
+    result_b: Path = typer.Argument(..., help="Second run result JSON file (new model)."),
     test: str = typer.Option(
         "mcnemar", "--test", "-t", help="Statistical test: mcnemar or wilcoxon."
     ),  # noqa: E501
     alpha: float = typer.Option(0.05, "--alpha", help="Significance level."),
+    format: str = typer.Option(
+        "text", "--format", "-f", help="Output format: text (default) or json (pipeable)."
+    ),  # noqa: E501
+    fail_on_regression: bool = typer.Option(
+        False,
+        "--fail-on-regression",
+        help=(
+            "Exit with code 2 if result_b is statistically significantly WORSE than result_a. "
+            "Exit 0 = no significant difference or B is better than A. "
+            "Designed for CI: gate deployment when a model regresses."
+        ),
+    ),  # noqa: E501
 ) -> None:
     """
     Compare two model runs with significance testing.
@@ -289,22 +342,29 @@ def compare(
     Applies McNemar's test (binary outcomes) or Wilcoxon signed-rank test
     (continuous scores) and reports the test statistic, p-value, and effect size.
 
-    Example:
-      evalkit compare gpt4o_results.json claude_results.json --test mcnemar
+    Exit codes (with --fail-on-regression):
+      0 = no significant difference, or result_b is significantly better
+      2 = result_b is significantly WORSE than result_a (regression detected)
+
+    Examples:
+      evalkit compare baseline.json new_model.json
+      evalkit compare baseline.json new_model.json --format json | jq .reject_null
+      evalkit compare baseline.json new_model.json --fail-on-regression
     """
     from typing import cast
 
     from evalkit.metrics.comparison import McNemarTest, TestResult, WilcoxonTest
 
-    def load_results(path: Path) -> dict[str, object]:
+    def load_result_file(path: Path) -> dict[str, object]:
+        """Load a saved result JSON (from evalkit run --save-results or result.save())."""
         if not path.exists():
             console.print(f"[red]File not found: {path}[/red]")
             raise typer.Exit(1)
-        result: dict[str, object] = json.loads(path.read_text())
-        return result
+        loaded: dict[str, object] = json.loads(path.read_text())
+        return loaded
 
-    a = load_results(result_a)
-    b = load_results(result_b)
+    a = load_result_file(result_a)
+    b = load_result_file(result_b)
 
     if a.get("example_ids") != b.get("example_ids"):
         console.print(
@@ -328,23 +388,79 @@ def compare(
         console.print(f"[red]Unknown test '{test}'. Use: mcnemar, wilcoxon[/red]")
         raise typer.Exit(1)
 
-    decision = (
-        "[green]REJECT H₀[/green]" if result.reject_null else "[yellow]fail to reject H₀[/yellow]"
-    )  # noqa: E501
+    # Directionality:
+    # McNemar: effect_size is odds ratio (a_wins / b_wins). >1 means A won more
+    #   discordant pairs, so B performed worse than A. Range: (0, ∞).
+    # Wilcoxon: effect_size is rank-biserial correlation r = 1 - 2W/(n*(n+1)).
+    #   diffs = a - b, so r > 0 means A scored higher than B overall.
+    #   Range: [-1, 1]. Never exceeds 1, so the >1 check used for McNemar is wrong here.
+    if test == "mcnemar":
+        b_is_worse = result.reject_null and result.effect_size > 1
+    else:
+        # Wilcoxon: positive r means A > B, so B is worse when r > 0 and significant
+        b_is_worse = result.reject_null and result.effect_size > 0
 
-    table = Table(title=f"{result.test_name} Test: {result_a.stem} vs {result_b.stem}")
-    table.add_column("Field", style="dim")
-    table.add_column("Value", style="bold")
-    table.add_row("Test statistic", f"{result.statistic:.4f}")
-    table.add_row("p-value", f"{result.p_value:.4f}")
-    table.add_row("Effect size", f"{result.effect_size:.4f}")
-    table.add_row("n pairs", str(result.n_pairs))
-    table.add_row("α", str(result.alpha))
-    table.add_row("Decision", decision)
-    if result.note:
-        table.add_row("Note", result.note)
+    if format == "json":
+        print(
+            json.dumps(
+                {
+                    "test": result.test_name,
+                    "statistic": result.statistic,
+                    "p_value": result.p_value,
+                    "effect_size": result.effect_size,
+                    "n_pairs": result.n_pairs,
+                    "alpha": result.alpha,
+                    "reject_null": result.reject_null,
+                    "b_is_significantly_worse": b_is_worse,
+                    "note": result.note or "",
+                    "files": {"a": str(result_a), "b": str(result_b)},
+                },
+                indent=2,
+            )
+        )
+    else:
+        decision = (
+            "[green]REJECT H₀[/green]"
+            if result.reject_null
+            else "[yellow]fail to reject H₀[/yellow]"
+        )
+        tab = Table(title=f"{result.test_name}: {result_a.stem} vs {result_b.stem}")
+        tab.add_column("Field", style="dim")
+        tab.add_column("Value", style="bold")
+        tab.add_row("Test statistic", f"{result.statistic:.4f}")
+        tab.add_row("p-value", f"{result.p_value:.4f}")
+        tab.add_row("Effect size", f"{result.effect_size:.4f}")
+        tab.add_row("n pairs", str(result.n_pairs))
+        tab.add_row("α", str(result.alpha))
+        tab.add_row("Decision", decision)
+        if result.note:
+            tab.add_row("Note", result.note)
+        console.print(tab)
 
-    console.print(table)
+        if b_is_worse:
+            console.print(
+                Panel(
+                    f"[red]{result_b.stem} is statistically significantly WORSE "
+                    f"than {result_a.stem}.[/red]\n"
+                    f"effect={result.effect_size:.3f}, p={result.p_value:.4f} < α={alpha}\n"
+                    "Do not deploy the new model without investigation.",
+                    title="[red]⚠ Regression Detected[/red]",
+                    border_style="red",
+                )
+            )
+        elif result.reject_null:
+            console.print(
+                Panel(
+                    f"[green]{result_b.stem} is statistically significantly BETTER "
+                    f"than {result_a.stem}.[/green]\n"
+                    f"effect={result.effect_size:.3f}, p={result.p_value:.4f} < α={alpha}",
+                    title="[green]✓ Improvement Confirmed[/green]",
+                    border_style="green",
+                )
+            )
+
+    if fail_on_regression and b_is_worse:
+        raise typer.Exit(2)
 
 
 @app.command()
@@ -459,11 +575,32 @@ def table(
 
 
 @app.command()
-def version() -> None:
+def version(
+    cite: bool = typer.Option(False, "--cite", help="Print BibTeX citation entry."),
+) -> None:
     """Print evalkit version information."""
     from evalkit import __version__
 
     console.print(f"evalkit-research [bold cyan]{__version__}[/bold cyan]")
+
+    if cite:
+        import datetime
+
+        current_year = datetime.datetime.now().year
+        bibtex = (
+            "@software{evalkit,\n"
+            "  author  = {McConnell, Bonnie},\n"
+            "  title   = {evalkit: Rigorous LLM Evaluation},\n"
+            f"  year    = {{{current_year}}},\n"
+            f"  version = {{{__version__}}},\n"
+            "  url     = {https://github.com/bonnie-mcconnell/evalkit},\n"
+            "  note    = {Bootstrap CIs, McNemar's test, BH-FDR correction, "
+            "automated statistical audit}\n"
+            "}"
+        )
+        console.print()
+        console.print("[dim]BibTeX citation:[/dim]")
+        console.print(bibtex)
 
 
 def _print_metrics_table(result: ExperimentResult) -> None:
@@ -507,8 +644,18 @@ def _print_audit(audit: AuditReport) -> None:
         lines.append(f"  [dim]→ {f.action}[/dim]")
         lines.append("")
 
-    border = "red" if not audit.passed else "yellow"
-    title = f"RigorChecker - [{'red' if not audit.passed else 'green'}]{'FAIL' if not audit.passed else 'PASS'}[/{'red' if not audit.passed else 'green'}]"  # noqa: E501
+    border = "red" if not audit.passed else "yellow" if audit.warnings else "green"
+    if not audit.passed:
+        status = "FAIL"
+        status_colour = "red"
+    elif audit.warnings:
+        n_warn = len(audit.warnings)
+        status = f"PASS ({n_warn} warning{'s' if n_warn != 1 else ''})"
+        status_colour = "yellow"
+    else:  # pragma: no cover - only fires with INFO-only findings (e.g. --judge llm)
+        status = "PASS"
+        status_colour = "green"
+    title = f"RigorChecker - [{status_colour}]{status}[/{status_colour}]"
     console.print(Panel("\n".join(lines).strip(), title=title, border_style=border))
 
 

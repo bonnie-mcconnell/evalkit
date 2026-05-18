@@ -53,6 +53,35 @@ _REPORT_TEMPLATE = """<!DOCTYPE html>
     --muted: #94a3b8;
     --mono: 'JetBrains Mono', 'Fira Code', monospace;
   }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff;
+      --surface: #f8f9fc;
+      --border: #e2e6ef;
+      --accent: #007a63;
+      --accent2: #5b3fcc;
+      --warn: #b45309;
+      --error: #b91c1c;
+      --ok: #15803d;
+      --text: #1a1d27;
+      --muted: #64748b;
+    }
+  }
+  @media print {
+    :root {
+      --bg: #ffffff;
+      --surface: #f8f9fc;
+      --border: #d1d5db;
+      --accent: #007a63;
+      --accent2: #5b3fcc;
+      --warn: #b45309;
+      --error: #b91c1c;
+      --ok: #15803d;
+      --text: #111827;
+      --muted: #6b7280;
+    }
+    .container { max-width: 100%; padding: 0; }
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif;
          font-size: 14px; line-height: 1.6; }
@@ -126,6 +155,11 @@ _REPORT_TEMPLATE = """<!DOCTYPE html>
   <div class="section">
     <h2>RigorChecker Audit <span class="badge {{ rigor_badge_class }}">{{ rigor_badge_text }}</span></h2>
     {{ findings_html }}
+  </div>
+
+  <div class="section">
+    <h2>Error Analysis <span style="font-size:0.8rem;color:var(--muted);font-weight:400">(worst {{ n_errors_shown }} examples - highest-scoring wrong answers)</span></h2>
+    {{ error_analysis_html }}
   </div>
 
   <div class="section">
@@ -206,6 +240,10 @@ class ReportGenerator:
             "findings_html": self._findings_html(audit),
             "run_details": self._run_details(result),
         }
+        # Compute wrong-example count once - used by both the header and the table body.
+        n_wrong = sum(1 for r in result.run_result.example_results if not r.is_correct)
+        substitutions["error_analysis_html"] = self._error_analysis_html(result, n_wrong)
+        substitutions["n_errors_shown"] = str(min(10, n_wrong))
 
         pattern = re.compile(r"\{\{\s*(\w+)\s*\}\}")
         return pattern.sub(
@@ -263,6 +301,49 @@ class ReportGenerator:
                 f"</div>"
             )
         return "\n".join(parts)
+
+    def _error_analysis_html(self, result: ExperimentResult, n_wrong: int | None = None) -> str:
+        """Render up to 10 wrong examples sorted by score descending (confident mistakes first)."""
+        wrong = result.worst_examples(10)
+        if not wrong:
+            return '<p style="color:var(--ok)">✅ No incorrect examples - model got everything right.</p>'
+
+        rows = []
+        for ex in wrong:
+            prompt_preview = _e(
+                str(ex["prompt"])[:200] + ("…" if len(str(ex["prompt"])) > 200 else "")
+            )
+            output_val = _e(str(ex["output"])[:120] + ("…" if len(str(ex["output"])) > 120 else ""))
+            ref_val = _e(str(ex["reference"])[:80])
+            score_val = f"{ex['score']:.3f}"
+            reasoning = _e(str(ex["reasoning"])[:200]) if ex["reasoning"] else "<em>none</em>"
+            rows.append(
+                f"<tr>"
+                f"<td style='font-family:var(--mono);font-size:0.75rem;color:var(--muted)'>{_e(str(ex['example_id']))}</td>"
+                f"<td style='font-size:0.8rem;max-width:240px'>{prompt_preview}</td>"
+                f"<td style='color:var(--error);font-family:var(--mono);font-size:0.85rem'>{output_val}</td>"
+                f"<td style='color:var(--ok);font-family:var(--mono);font-size:0.85rem'>{ref_val}</td>"
+                f"<td style='text-align:center'>{score_val}</td>"
+                f"<td style='font-size:0.75rem;color:var(--muted)'>{reasoning}</td>"
+                f"</tr>"
+            )
+
+        table = (
+            "<table>"
+            "<thead><tr>"
+            "<th>ID</th><th>Prompt (preview)</th>"
+            "<th style='color:var(--error)'>Model output</th>"
+            "<th style='color:var(--ok)'>Expected</th>"
+            "<th>Score</th><th>Reasoning</th>"
+            "</tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody>"
+            "</table>"
+            "<p style='font-size:0.75rem;color:var(--muted);margin-top:0.5rem'>"
+            "High score on a wrong answer = the model was confidently incorrect. "
+            "These are the most revealing failure modes."
+            "</p>"
+        )
+        return table
 
     def _run_details(self, result: ExperimentResult) -> str:
         run = result.run_result

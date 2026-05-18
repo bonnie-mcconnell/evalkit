@@ -263,6 +263,19 @@ def test_compare_requires_n_if_not_significant():
         assert "Increase N" in text or "increase n" in text.lower() or "≥" in text
 
 
+def test_compare_invalid_test_param_raises():
+    """
+    compare(test='invalid') should raise ValueError immediately with valid options listed.
+    Previously this was silently treated as 'auto', hiding typos.
+    """
+    dataset = _make_dataset(60)
+    result_a = _run_experiment(dataset, accuracy=0.80, seed=1, name="a")
+    result_b = _run_experiment(dataset, accuracy=0.75, seed=2, name="b")
+
+    with pytest.raises(ValueError, match="'mann-whitney' is not valid"):
+        result_a.compare(result_b, test="mann-whitney")
+
+
 def test_compare_symmetry_of_accuracies():
     """ComparisonResult should store both accuracies correctly."""
     dataset = _make_dataset(80)
@@ -515,6 +528,35 @@ def test_comparison_result_winner_wilcoxon_b_better():
     assert comp.winner == "b"
 
 
+def test_comparison_result_winner_unknown_test_raises():
+    """winner must raise ValueError for any test_name that is not McNemar or Wilcoxon.
+
+    This verifies the explicit guard added to prevent silent wrong answers if a
+    new test is added in future without updating the winner convention logic.
+    Previously the property had a bare ``else`` that silently applied Wilcoxon
+    semantics to any unknown test name - incorrect behaviour that this fix
+    catches immediately instead of returning a plausible-but-wrong string.
+    """
+    from evalkit.core.experiment import ComparisonResult
+
+    comp = ComparisonResult(
+        experiment_a="a",
+        experiment_b="b",
+        test_name="FutureUnknownTest",
+        statistic=5.0,
+        p_value=0.025,
+        effect_size=0.35,
+        reject_null=True,
+        alpha=0.05,
+        n_pairs=100,
+        note="",
+        accuracy_a=0.80,
+        accuracy_b=0.70,
+    )
+    with pytest.raises(ValueError, match="unknown test_name"):
+        _ = comp.winner
+
+
 def test_comparison_result_is_frozen():
     """ComparisonResult must be immutable - result objects should not be mutated."""
     from evalkit.core.experiment import ComparisonResult
@@ -587,15 +629,21 @@ def test_compare_auto_uses_mcnemar_for_binary_scores():
 # ── additional_metric failure path ────────────────────────────────────────────
 
 
-def test_experiment_additional_metric_failure_is_logged(caplog):
+def test_experiment_additional_metric_failure_raises():
     """
-    When an additional metric raises, the error should be logged as a warning
-    and the experiment should still complete successfully with Accuracy.
-    """
-    import logging
+    When an additional metric raises an unexpected error (anything other than
+    ImportError), _compute_metrics re-raises as RuntimeError so the bug is visible.
 
+    Previously this swallowed the error and logged a warning, which hid bugs during
+    development. The new behaviour is intentional: ImportError is swallowed (optional
+    dependency not installed) but all other exceptions surface immediately.
+    """
     import numpy as np
 
+    from evalkit.core.dataset import PromptTemplate
+    from evalkit.core.experiment import Experiment
+    from evalkit.core.judge import ExactMatchJudge
+    from evalkit.core.runner import MockRunner
     from evalkit.metrics.base import Metric
 
     class BrokenMetric(Metric):
@@ -604,26 +652,15 @@ def test_experiment_additional_metric_failure_is_logged(caplog):
             return "BrokenMetric"
 
         def _point_estimate(self, predictions: np.ndarray, references: np.ndarray) -> float:
-            raise RuntimeError("This metric always fails")
+            raise ValueError("This metric always fails")
 
     dataset = _make_dataset(60)
-    result = _run_experiment(
-        dataset,
-        accuracy=0.75,
-        name="test_broken_metric",
-    )
-
-    from evalkit.core.dataset import PromptTemplate
-    from evalkit.core.experiment import Experiment
-    from evalkit.core.judge import ExactMatchJudge
-    from evalkit.core.runner import MockRunner
-
     judge = ExactMatchJudge()
     tmpl = PromptTemplate("{{ question }}")
     runner = MockRunner(judge=judge, template=tmpl, accuracy=0.75, seed=42)
 
-    with caplog.at_level(logging.WARNING, logger="evalkit.core.experiment"):
-        result = Experiment(
+    with pytest.raises(RuntimeError, match="BrokenMetric.*raised an unexpected error"):
+        Experiment(
             "broken_metric_test",
             dataset,
             runner,
@@ -631,12 +668,53 @@ def test_experiment_additional_metric_failure_is_logged(caplog):
             n_resamples=300,
         ).run()
 
+
+def test_experiment_additional_metric_import_error_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    When an additional metric raises ImportError (optional dependency missing),
+    the experiment should log a warning and continue rather than raising.
+    This matches the typical case of e.g. BLEUScore without nltk installed.
+    """
+    import logging
+
+    import numpy as np
+
+    from evalkit.core.dataset import PromptTemplate
+    from evalkit.core.experiment import Experiment
+    from evalkit.core.judge import ExactMatchJudge
+    from evalkit.core.runner import MockRunner
+    from evalkit.metrics.base import Metric
+
+    class MissingDepMetric(Metric):
+        @property
+        def name(self) -> str:
+            return "MissingDepMetric"
+
+        def _point_estimate(self, predictions: np.ndarray, references: np.ndarray) -> float:
+            raise ImportError("fake_optional_package is not installed")
+
+    dataset = _make_dataset(60)
+    judge = ExactMatchJudge()
+    tmpl = PromptTemplate("{{ question }}")
+    runner = MockRunner(judge=judge, template=tmpl, accuracy=0.75, seed=42)
+
+    with caplog.at_level(logging.WARNING, logger="evalkit.core.experiment"):
+        result = Experiment(
+            "missing_dep_test",
+            dataset,
+            runner,
+            additional_metrics=[MissingDepMetric()],
+            n_resamples=300,
+        ).run()
+
     # Experiment completes - Accuracy is present
     assert "Accuracy" in result.metrics
-    # BrokenMetric is absent
-    assert "BrokenMetric" not in result.metrics
+    # MissingDepMetric is absent (skipped due to ImportError)
+    assert "MissingDepMetric" not in result.metrics
     # Warning was logged
-    assert any("BrokenMetric" in r.message for r in caplog.records)
+    assert any("MissingDepMetric" in r.message for r in caplog.records)
 
 
 def test_approx_required_n_with_non_significant_result():
@@ -644,6 +722,11 @@ def test_approx_required_n_with_non_significant_result():
     _approx_required_n computes a sensible N when two models have different
     accuracy. This exercises lines 137-144 in experiment.py.
     The function is called when reject_null=False in ComparisonResult.__str__.
+
+    The formula uses a two-proportion z-test approximation (conservative upper
+    bound vs. the exact paired test). The exact value 2060 is the correct output
+    for the two-proportion z-test with these inputs; downstream users are warned
+    it is an upper bound.
     """
     from evalkit.core.experiment import ComparisonResult
 
@@ -663,7 +746,7 @@ def test_approx_required_n_with_non_significant_result():
     )
     # Should not return 99_999 (delta=0.04 > 0.001) - should compute a real N
     n = comp._approx_required_n()
-    assert 100 < n < 50_000  # plausible range for 4pp difference at 80% power
+    assert n == 2060  # exact: z_α=1.96, z_β=0.842, Δ=0.04, p̄=0.70, p_a=0.72, p_b=0.68
     # And str() should include it
     text = str(comp)
     assert "Increase N" in text

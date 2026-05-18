@@ -4,6 +4,8 @@ from evalkit.metrics.accuracy import (
     BLEUScore,
     ExpectedCalibrationError,
     F1Score,
+    PrecisionScore,
+    RecallScore,
     ROUGEScore,
 )
 from evalkit.metrics.agreement import AgreementResult, CohenKappa, KrippendorffAlpha
@@ -22,6 +24,8 @@ __all__ = [
     "Accuracy",
     "BalancedAccuracy",
     "F1Score",
+    "PrecisionScore",
+    "RecallScore",
     "BLEUScore",
     "ROUGEScore",
     "ExpectedCalibrationError",

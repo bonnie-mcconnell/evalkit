@@ -131,3 +131,62 @@ def test_html_contains_no_python_linter_comments(experiment_result):
         "Check report.py for noqa comments inside the template string."
     )
     assert "# type:" not in html, "Python type comment '# type:' leaked into HTML output."
+
+
+def test_html_has_light_mode_css(experiment_result):
+    """Report must include light-mode media query for browser and sharing contexts."""
+    html = ReportGenerator().generate(experiment_result)
+    assert "prefers-color-scheme: light" in html
+
+
+def test_html_has_print_css(experiment_result):
+    """Report must include print media query so tearsheets print correctly."""
+    html = ReportGenerator().generate(experiment_result)
+    assert "@media print" in html
+
+
+def test_html_contains_error_analysis_section(experiment_result):
+    """Report must include the Error Analysis section header."""
+    html = ReportGenerator().generate(experiment_result)
+    assert "Error Analysis" in html
+
+
+def test_html_error_analysis_shows_wrong_examples():
+    """With a low-accuracy run, the error analysis table must contain wrong-example rows."""
+    records = [{"id": str(i), "question": f"q{i}", "label": "yes"} for i in range(100)]
+    ds = EvalDataset.from_list(records, name="low_acc_ds")
+    template = PromptTemplate("{{ question }}")
+    # accuracy=0.5 means ~50 wrong answers; we should see some in the report
+    runner = MockRunner(judge=ExactMatchJudge(), template=template, accuracy=0.50)
+    result = Experiment("low_acc_test", ds, runner).run()
+    html = ReportGenerator().generate(result)
+    # The error table header columns should be present
+    assert "Model output" in html
+    assert "Expected" in html
+
+
+def test_html_error_analysis_all_correct():
+    """When the model gets everything right, the error analysis shows a success message."""
+    records = [{"id": str(i), "question": f"q{i}", "label": "yes"} for i in range(100)]
+    ds = EvalDataset.from_list(records, name="perfect_ds")
+    template = PromptTemplate("{{ question }}")
+    runner = MockRunner(judge=ExactMatchJudge(), template=template, accuracy=1.0)
+    result = Experiment("perfect_test", ds, runner).run()
+    html = ReportGenerator().generate(result)
+    assert "No incorrect examples" in html
+
+
+def test_html_error_analysis_escapes_special_characters():
+    """HTML-special characters in outputs/references must not break the report."""
+    records = [
+        {"id": str(i), "question": "<script>alert('xss')</script>", "label": "safe & correct"}
+        for i in range(60)
+    ]
+    ds = EvalDataset.from_list(records, name="xss_test_ds")
+    template = PromptTemplate("{{ question }}")
+    runner = MockRunner(judge=ExactMatchJudge(), template=template, accuracy=0.5)
+    result = Experiment("xss_test", ds, runner).run()
+    html = ReportGenerator().generate(result)
+    # Raw script tag must not appear unescaped in the output
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html or "alert" not in html
