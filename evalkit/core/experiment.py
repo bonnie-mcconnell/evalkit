@@ -212,7 +212,7 @@ class ComparisonResult:
             "note": self.note,
             "approx_required_n": self._approx_required_n() if not self.reject_null else None,
         }
-        dest.write_text(json.dumps(payload, indent=2))
+        dest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return dest
 
     def _approx_required_n(self) -> int:
@@ -622,7 +622,7 @@ class ExperimentResult:
             ],
         }
 
-        dest.write_text(json.dumps(payload, indent=2))
+        dest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         logger.info("Results saved to %s", dest)
         return dest
 
@@ -652,7 +652,7 @@ class ExperimentResult:
         if path is not None:
             dest = Path(path)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(html)
+            dest.write_text(html, encoding="utf-8")
             logger.info("Report written to %s", dest)
             return str(dest)
         return html

@@ -152,7 +152,7 @@ class MultipleComparisonResult:
                 )
             ],
         }
-        dest.write_text(json.dumps(payload, indent=2))
+        dest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return dest
 
 

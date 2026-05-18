@@ -153,7 +153,7 @@ def _run_evaluation(run_id: str, request: RunRequest) -> None:
         summary["example_ids"] = result.run_result.example_ids
         summary["status"] = "complete"
 
-        result_path.write_text(json.dumps(summary, indent=2))
+        result_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
         # Also generate HTML report
         report_path = RESULTS_DIR / f"{run_id}.html"
@@ -161,7 +161,7 @@ def _run_evaluation(run_id: str, request: RunRequest) -> None:
 
     except Exception as e:
         logger.error("Run %s failed: %s", run_id, e)
-        result_path.write_text(json.dumps({"status": "failed", "error": str(e)}))
+        result_path.write_text(json.dumps({"status": "failed", "error": str(e)}), encoding="utf-8")
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -178,7 +178,7 @@ def start_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[st
     """Start an evaluation run asynchronously."""
     run_id = str(uuid.uuid4())
     result_path = RESULTS_DIR / f"{run_id}.json"
-    result_path.write_text(json.dumps({"status": "running", "run_id": run_id}))
+    result_path.write_text(json.dumps({"status": "running", "run_id": run_id}), encoding="utf-8")
 
     background_tasks.add_task(_run_evaluation, run_id, request)
     return {"run_id": run_id, "status": "running"}
