@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evalkit-research"
-version = "0.2.0"
+version = "0.5.1"
 description = "Rigorous LLM evaluation: bootstrap CIs, significance testing, and automated statistical auditing"
 readme = "README.md"
 license = "MIT"
@@ -13,6 +13,7 @@ authors = [{ name = "Bonnie McConnell", email = "bonniep.mcconnell@gmail.com" }]
 keywords = ["llm", "evaluation", "statistics", "nlp", "benchmark"]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -51,8 +52,11 @@ huggingface = [
 agreement = [
     "krippendorff>=0.6",
 ]
+semantic = [
+    "sentence-transformers>=2.2",
+]
 all = [
-    "evalkit-research[openai,anthropic,api,generation,huggingface,agreement,dataframe]",
+    "evalkit-research[openai,anthropic,api,generation,huggingface,agreement,dataframe,semantic]",
 ]
 dev = [
     "evalkit-research[all]",
@@ -60,7 +64,10 @@ dev = [
     "datasets>=2.16",
     "pandas>=2.0",
     "jupyter>=1.0",
+    "nbconvert>=7.0",
+    "ipykernel>=6.0",
     "pytest>=7.4",
+    "pytest-asyncio>=0.23",
     "pytest-cov>=4.1",
     "ruff>=0.2",
     "mypy>=1.8",
@@ -95,6 +102,8 @@ select = ["E", "F", "I", "N", "W", "UP"]
 "evalkit/analysis/report.py" = ["E501"]
 # judge.py contains multi-line prompt strings that must remain intact
 "evalkit/core/judge.py" = ["E501"]
+# examples use Rich markup strings that exceed 100 chars when including terminal formatting codes
+"examples/*.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -106,3 +115,7 @@ testpaths = ["tests"]
 # No coverage by default - contributors can run `pytest` quickly.
 # For coverage: `pytest --cov=evalkit` or `make check` (what CI runs).
 addopts = "--tb=short"
+asyncio_mode = "strict"
+markers = [
+    "slow: marks tests as slow (bootstrap with large n_resamples). Skip with: pytest -m 'not slow'",
+]

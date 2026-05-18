@@ -38,7 +38,7 @@ jobs:
         run: mypy evalkit/
 
       - name: Run tests with coverage
-        run: pytest --cov=evalkit --cov-report=xml --cov-report=term-missing -v -m "not slow"
+        run: pytest --cov=evalkit --cov-report=xml --cov-report=term-missing --cov-fail-under=100 -v -m "not slow"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -61,6 +61,14 @@ jobs:
       - run: pip install -e ".[dev]"
       - name: Run full workflow (no API keys required)
         run: python examples/full_workflow.py
+      - name: Run benchmark audit
+        run: python examples/benchmark_audit.py
+      - name: Verify notebook executes cleanly
+        run: |
+          pip install nbconvert ipykernel
+          jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=120 \
+            --output /tmp/walkthrough_ci.ipynb examples/walkthrough.ipynb
+          echo "Notebook executed successfully"
 
   package:
     name: Verify package builds
@@ -73,7 +81,14 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install build
-      - run: python -m build --wheel
+      - name: Build wheel and sdist
+        run: python -m build
+      - name: Verify sdist includes example data (MANIFEST.in smoke test)
+        run: |
+          tar -tzf dist/evalkit_research-*.tar.gz | grep "examples/data/balanced_demo.jsonl"
+          tar -tzf dist/evalkit_research-*.tar.gz | grep "examples/walkthrough.ipynb"
+          tar -tzf dist/evalkit_research-*.tar.gz | grep "docs/statistical_methods.md"
+          echo "MANIFEST.in OK - all expected files present in sdist"
       - run: pip install dist/*.whl
       - name: Smoke test installed package
         run: |
@@ -84,6 +99,7 @@ jobs:
               PowerAnalysis, Experiment, EvalDataset, PromptTemplate,
               MockRunner, ExactMatchJudge, Accuracy, RigorChecker,
               McNemarTest, BHCorrection, CohenKappa,
+              PrecisionScore, RecallScore, F1Score, BalancedAccuracy,
           )
           print("All core imports OK")
           '
