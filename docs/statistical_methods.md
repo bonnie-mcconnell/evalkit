@@ -1,6 +1,6 @@
 # Statistical Methods
 
-Every statistical choice in evalkit has a specific reason. This document records those reasons at a level of precision that lets you defend them in an interview or a methods section.
+Every statistical choice in evalkit has a specific reason. This document records those reasons at a level of precision suitable for a methods section or code review.
 
 ---
 
@@ -20,7 +20,7 @@ The Wilson interval applies only to proportions. F1, BalancedAccuracy, and ECE h
 
 Using one method for everything eliminates this ambiguity. The cost is slightly wider CIs for accuracy on small samples - a cost worth paying.
 
-BCa would be a defensible improvement for all metrics. It is not used because it requires computing the jackknife influence function, which is O(n²) for some metrics and adds implementation complexity. For n ≥ 100 (which the RigorChecker enforces), percentile bootstrap error is well below 1%.
+BCa would be a defensible improvement for all metrics. It is not used because it requires computing the jackknife influence function, which is O(n²) for some metrics and adds implementation complexity. For n ≥ 100 - above the sample-size floor used by RigorChecker - percentile bootstrap Monte Carlo error is well below 1%.
 
 ### Why stratified resampling
 
@@ -94,7 +94,41 @@ Unlike Cohen's d, rank-biserial r makes no distributional assumption.
 
 ---
 
-## Benjamini-Hochberg FDR Correction
+## Post-hoc Sample Size Estimation
+
+### When evalkit shows a required-N recommendation
+
+When a comparison is not statistically significant (`reject_null=False`), evalkit shows an estimated minimum N required to detect the observed effect at 80% power. This appears in `ComparisonResult.__str__()` and in JSON output as `approx_required_n`.
+
+### Why a two-proportion z-test formula, not the exact paired test formula
+
+The exact power formula for McNemar's test requires knowing the discordant-pair fraction φ = (n₁₂ + n₂₁) / n - the proportion of examples on which the two models *disagree*. The exact formula for Wilcoxon requires knowing the within-pair score correlation ρ. Neither quantity is stored in `ComparisonResult`; they are properties of the raw run data.
+
+Rather than require the user to pass raw data into a post-hoc display method, evalkit uses the two-proportion z-test formula as a computationally available approximation:
+
+```
+n ≈ ((z_α √(2p̄(1-p̄)) + z_β √(p_A(1-p_A) + p_B(1-p_B))) / Δ)²
+```
+
+where Δ = |p_A − p_B|, p̄ = (p_A + p_B)/2, z_α = 1.96 (two-tailed α=0.05), z_β = 0.842 (80% power).
+
+### Direction of the approximation error
+
+The two-proportion z-test ignores the within-pair correlation of outcomes. For paired tests, this correlation *always* reduces variance - pairing never hurts. Therefore:
+
+- The two-proportion formula *overestimates* the required N relative to the exact paired test.
+- The displayed N is a **conservative upper bound**: the true required N for a paired McNemar or Wilcoxon test will be equal or lower.
+- The approximation never tells you that you need *fewer* examples than you actually do.
+
+This conservative direction is the correct failure mode for a sample size warning. Overcounting required N wastes budget; undercounting leads to under-powered experiments that produce false negatives.
+
+### Magnitude of the conservatism
+
+For typical evaluation settings (p_A ≈ 0.75, p_B ≈ 0.70, φ ≈ 0.20 discordant pairs), McNemar's exact required N is roughly 60–75% of the two-proportion z-test N. The displayed number is approximately 1.3–1.7× the true required N. For planning purposes, this means collecting the displayed N guarantees adequate power.
+
+---
+
+
 
 ### The multiple testing problem, precisely stated
 
@@ -224,7 +258,7 @@ This is a small correction but it matters: many models output exactly 1.0 for tr
 
 ## Design decisions defensible under pressure
 
-**"Why not use the BCa bootstrap?"** BCa is more accurate for small n, but it requires the jackknife influence function, which is O(n²) for some metrics. For n ≥ 100 (which the RigorChecker enforces), the percentile bootstrap error is below 1% - well within acceptable range.
+**"Why not use the BCa bootstrap?"** BCa is more accurate for small n, but it requires the jackknife influence function, which is O(n²) for some metrics. For n ≥ 100, the percentile bootstrap Monte Carlo error is below 1% - well within acceptable range. (The RigorChecker's hard minimum is n=30; UNDERPOWERED_CI fires at n<100 for CI precision tasks.)
 
 **"Why McNemar's not a proportion test?"** Because the observations are paired. The two-proportion z-test and Fisher's exact test assume independent samples. McNemar's uses the pairing information and has higher power than any independence-assuming test on the same data.
 
@@ -233,3 +267,83 @@ This is a small correction but it matters: many models output exactly 1.0 for tr
 **"Why is the kappa threshold 0.60 not 0.70 or 0.80?"** 0.60 is the "substantial agreement" threshold from Landis & Koch (1977), which is the standard reference in NLP evaluation. At κ=0.60, the bootstrap CI on kappa will typically include 0.55-0.65, which is still borderline reliable. We use it as the minimum bar, not the target. For publication-quality results, κ ≥ 0.70 is a better target.
 
 **"Why does `_approx_required_n()` use a normal approximation in `ComparisonResult`?"** When two models are not significantly different, we want to tell the user how many examples would be needed to detect the observed accuracy gap at 80% power. The normal approximation (Lehr's formula) is used here, not McNemar's formula, because we don't know the true discordant proportion - we're providing a rough estimate, not a precise sample size. The note in the output makes this clear.
+
+---
+
+## Practical interview questions answered
+
+**"What does your RigorChecker actually check, specifically?"**
+
+Eight distinct failure modes in priority order:
+
+1. `SAMPLE_TOO_SMALL` - n < 30. Below this the bootstrap is unreliable (too few resamples to estimate tail quantiles) and the CI is uninformative regardless of width.
+2. `UNDERPOWERED_CI` - the CI half-width is > 0.05 (5 percentage points). You're reporting accuracy to two decimal places but the measurement is not that precise.
+3. `CLASS_IMBALANCE` - the majority class exceeds 75% of examples. Accuracy is inflated relative to minority-class performance. Warning level: results require caveats.
+4. `SEVERE_CLASS_IMBALANCE` - the majority class exceeds 90% of examples. A trivial majority-class predictor achieves that accuracy; accuracy is essentially meaningless. Error level: results should not be reported without switching metrics.
+5. `MULTIPLE_TESTING_UNCORRECTED` - K ≥ 2 comparisons were made and at least one unadjusted p-value is < alpha, but the BH-adjusted p-value is not. Reporting the unadjusted result is a false positive.
+6. `UNDERPOWERED_COMPARISON` - two models are compared but the sample size is below the minimum needed to detect the observed accuracy gap at 80% power.
+7. `LOW_JUDGE_AGREEMENT` - Cohen's κ or Krippendorff's α for the judge is below 0.60. Every score this judge produces is unreliable.
+8. `JUDGE_AGREEMENT_REQUIRED` - an LLM judge (stochastic) was used but no inter-rater agreement measurement has been recorded in the audit. Running the judge twice on a sample and computing κ is recommended before publishing results.
+
+
+**"Why 90% as the SEVERE_CLASS_IMBALANCE threshold, and why is there a two-tier system?"**
+
+The two-tier system reflects different degrees of harm:
+
+- **75% threshold (`CLASS_IMBALANCE`, WARNING)**: A dataset that is 75% majority class means a constant-positive predictor achieves 75% accuracy. This is inflated but not necessarily higher than a real model. Results need caveats and `macro-F1` alongside accuracy, but accuracy is not meaningless - report both.
+
+- **90% threshold (`SEVERE_CLASS_IMBALANCE`, ERROR)**: At 90% majority, a zero-effort majority classifier scores 90%. A real model that achieves 88% is technically *worse* than the trivial baseline, yet would be reported as impressive without this check. Accuracy here is actively misleading. The threshold is deliberately set at 90% rather than 80% or 85% - to avoid firing on naturally skewed but tractable datasets (product review sentiment is typically 70-80% positive; that should be a warning, not a hard stop).
+
+**"What does `_point_estimate` vs `compute` separate in the Metric abstraction?"**
+
+`_point_estimate(predictions, references)` computes the statistic on one set of arrays - this is the method subclasses implement. `compute(predictions, references)` calls `_point_estimate` for the observed value, then calls it B times on bootstrap resamples, and wraps everything in a `MetricResult`. The separation means implementing a new metric requires writing one method (not the bootstrap loop), and the bootstrap is guaranteed to be applied consistently across all metrics.
+
+**"Why are `predictions` and `references` passed as `np.ndarray` to `_point_estimate` if users pass `list[Any]`?"**
+
+Because `_point_estimate` needs to accept indexing for bootstrap resampling (`predictions[idx]`). Plain lists don't support fancy indexing. The conversion happens once at the top of `compute()` so subclasses don't have to think about it.
+
+**"If you were at Atlassian evaluating a new LLM-powered feature, what would your eval setup look like?"**
+
+This is the translation to production. The setup I'd use:
+
+1. **Sample size first**: run `pa.for_ci_precision(desired_half_width=0.03)` with my expected accuracy. At 0.70 accuracy, that's n=897 to report accuracy to ±3%. I'd label that many examples before writing any evaluation code.
+
+2. **Stratified split**: use `dataset.split(test_size=0.2, stratify=True)` so class distribution matches production. Commit the test split - never change it.
+
+3. **Judge validation**: if using an LLM judge, run it twice on 100 examples and compute κ. If κ < 0.60, fix the judge prompt before any evaluation. This step is almost always skipped in practice and almost always matters.
+
+4. **Baseline first**: evaluate the current production model on the full test set. This is the number you need to beat, with its CI.
+
+5. **McNemar's not accuracy comparison**: `result_new.compare(result_old)`. Same 854 examples, paired test, verified alignment. A new model needs to win on the *same* examples, not just have higher overall accuracy.
+
+6. **BH correction**: if comparing multiple prompt variants, collect all p-values and pass them to `BHCorrection`. Report only adjusted p-values.
+
+7. **Attach the `AuditReport` to the PR**: the `posthoc_audit` from `Experiment.run()` goes into the PR description. Green board means the result is defensible. Red board means the experiment doesn't ship.
+
+**"What's the difference between statistical significance and practical significance?"**
+
+Statistical significance says: given the null hypothesis (no difference), this result is unlikely to have occurred by chance. Practical significance says: the difference is large enough to matter in production.
+
+You can have statistical significance without practical significance: with n=10,000, a 0.3pp accuracy difference is statistically significant but operationally irrelevant. You can also have practical significance without statistical significance: with n=30, a 12pp difference might be practically huge but the CI is so wide you can't tell if it's real.
+
+evalkit's power analysis addresses both. `for_ci_precision` tells you whether your CI is narrow enough to make practical claims. McNemar's tests whether the difference is real. Run both.
+
+---
+
+## Choosing a judge
+
+**"When should I use each judge type?"**
+
+The correct judge depends on what "correct" means for your task:
+
+`ExactMatchJudge` - the output must exactly equal the reference (after optional case normalisation). Use for tasks with a single canonical answer: multiple-choice (A/B/C/D), classification labels (positive/negative), closed-form factual answers (a specific date or name). This is the most conservative judge and should be the default for any task where exact equality is meaningful.
+
+`ContainsJudge` - the output must contain the reference as a substring. Use when the model's output is a sentence or paragraph that should include a key phrase, but the exact wording around it is acceptable. Example: the reference is "Paris" and the model says "The capital of France is Paris, population 2.1M" - that is correct under ContainsJudge, wrong under ExactMatchJudge. More lenient; can inflate accuracy if the reference is a very short string.
+
+`RegexMatchJudge` - the output must match a regex pattern, with optional group extraction. Use for structured outputs where the format matters: "Answer: A", "Confidence: 0.95", "Label: <category>". More precise than ContainsJudge and handles format validation in one step.
+
+`SemanticSimilarityJudge` - cosine similarity of sentence embeddings, correct if similarity ≥ threshold. Use for tasks where paraphrase is acceptable: summarisation, translation, open-ended QA where "Paris" and "the French capital" should both be counted correct. Requires `pip install "evalkit-research[semantic]"`. The threshold (default 0.85) needs calibration on your specific domain - validate with CohenKappa before trusting scores.
+
+`LLMJudge` - calls an LLM to score the response against the reference and returns a structured score + reasoning. Use for tasks where human-level semantic understanding is required: instruction following, reasoning quality, factual accuracy in long-form answers. Most expensive, most powerful, most unreliable without validation. Always measure inter-rater agreement (κ ≥ 0.60) before reporting results.
+
+**Rule of thumb:** start with ExactMatchJudge. If too strict, try ContainsJudge. If output format is structured, try RegexMatchJudge. If semantic equivalence matters, try SemanticSimilarityJudge. Only use LLMJudge when the task genuinely requires human-level judgment and you have budget for validation.

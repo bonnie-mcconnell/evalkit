@@ -12,6 +12,13 @@ build/
 venv/
 env/
 
+# API keys and secrets - NEVER commit these
+# Store keys as environment variables or in .env (never committed)
+.env
+.env.*
+*.pem
+*.key
+
 # Testing and coverage
 .pytest_cache/
 .coverage
@@ -28,6 +35,10 @@ checkpoints/
 # Keep examples output out of git
 examples/*.html
 examples/*.json
+
+# Non-project marketing collateral
+docs/blog_post_devto.md
+docs/linkedin_post.md
 
 # Editors
 .vscode/

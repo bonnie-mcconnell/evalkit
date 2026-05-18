@@ -5,30 +5,43 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/bonnie-mcconnell/evalkit/branch/main/graph/badge.svg)](https://codecov.io/gh/bonnie-mcconnell/evalkit)
-[![Open in Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/bonnie-mcconnell/evalkit/main?filepath=examples/walkthrough.ipynb)
+[![Open in Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/bonnie-mcconnell/evalkit/main?urlpath=lab/tree/examples/walkthrough.ipynb)
 
 I built this because I kept reading ML papers that reported accuracy improvements with no confidence intervals, no significance testing, and sample sizes that gave them less than 30% statistical power. The improvements were probably noise. Nobody could tell.
 
-The specific thing that annoyed me enough to build a library: you can run 20 prompt variants, find one that achieves 74% vs 71%, ship it, and never notice that at n=50 examples, a 3-point difference is almost certainly random. Existing evaluation frameworks (lm-evaluation-harness, DeepEval, RAGAS) compute metrics correctly but don't ask whether those metrics are trustworthy. evalkit makes the statistical audit automatic and non-optional.
-
-```bash
-pip install evalkit-research
-evalkit run data.jsonl --model mock --template "Q: {{ question }}"
-```
+The same problem exists in production. Teams ship prompt changes based on n=50 eval results, make model selection decisions where the two models' CIs overlap entirely, and run 20 variants to pick the "best" one - not realising the winner is almost certainly a false positive. The eval tooling computes the numbers correctly. It just never asks whether those numbers are trustworthy.
 
 ---
 
 ## The problem in one line
 
 ```python
-# What everyone does
-print(f"Model accuracy: {correct/total:.2f}")          # → 0.73  (what does this mean?)
+from evalkit import Accuracy
 
-# What evalkit does
-print(Accuracy().compute(predictions, references))     # → Accuracy: 0.7300 (95% CI: 0.6804–0.7785, n=200)
+predictions = [1, 0, 1, 1, 0, 1, 0, 1, 1, 0] * 20   # 200 examples
+references  = [1, 1, 1, 0, 0, 1, 0, 1, 0, 0] * 20
+
+# What everyone does
+correct = sum(p == r for p, r in zip(predictions, references))
+print(f"Model accuracy: {correct/len(predictions):.2f}")   # → 0.70  (what does this mean?)
+
+# What evalkit does (seed for reproducibility)
+print(Accuracy(seed=42).compute(predictions, references))
+# → Accuracy: 0.7000 (95% CI: 0.6350–0.7600, n=200)
 ```
 
-`0.73` without a CI could be anywhere from 0.60 to 0.88 on 50 examples. The CI tells you the actual precision of your measurement. If two models' CIs overlap substantially, claiming one is "better" is not a finding - it's noise.
+`0.70` at n=200 has a 95% CI of 63.5%–76.0% - a spread of 12.5 percentage points. At n=50, the same measurement gives a CI wider than ±13pp, meaning 70% could plausibly be anywhere from 57% to 83%. The CI tells you the actual precision of your measurement. If two models' CIs overlap substantially, claiming one is "better" is not a finding - it's noise.
+
+```bash
+pip install evalkit-research
+
+# Try it immediately - no API keys required:
+evalkit run examples/data/balanced_demo.jsonl \
+  --model mock \
+  --template "{{ text }}" \
+  --ref-field label \
+  --output report.html
+```
 
 ---
 
@@ -38,42 +51,137 @@ Every metric returns a `MetricResult` - never a bare float. This is enforced at 
 
 **The `RigorChecker`** is the core feature. Every experiment runs through a two-pass statistical audit: pre-flight (before you spend API budget) and post-hoc (the audit trail you attach to results). It catches underpowered sample sizes, class imbalance inflating accuracy, uncorrected multiple testing, and low LLM judge agreement - the four most common ways LLM evaluation goes wrong.
 
+The bootstrap is **stratified by reference class** - on imbalanced datasets, unstratified resampling occasionally produces resamples with zero minority-class examples, making CIs artificially narrow. The inner loop uses a pure-numpy implementation rather than sklearn (~2.6ms overhead per call × 10,000 resamples = 26s) - the numpy path runs in ~0.1ms per call, so the default 10,000-resample bootstrap completes in under 200ms.
+
+> **For the technical details:** every statistical choice in evalkit - why percentile bootstrap over BCa, why McNemar's over a paired t-test, why BH-FDR over Bonferroni, why stratified bootstrap on imbalanced data - is documented with full derivations and design rationale in **[docs/statistical_methods.md](docs/statistical_methods.md)**.
+
+Try it immediately without API keys using the bundled demo datasets:
+
+```bash
+# PASS (1 warning) - balanced classes, no errors; warning about comparison power
+evalkit run examples/data/balanced_demo.jsonl \
+  --model mock --template "{{ text }}" --ref-field label \
+  --output balanced_report.html
+
+# FAIL - fires SAMPLE_TOO_SMALL + SEVERE_CLASS_IMBALANCE errors
+evalkit run examples/data/underpowered_imbalanced_demo.jsonl \
+  --model mock --template "{{ text }}" --ref-field label \
+  --output imbalanced_report.html
+```
+
 ```
 ╔══════════════════════════════════════════════════════╗
 ║           evalkit  RigorChecker  Report              ║
 ╚══════════════════════════════════════════════════════╝
 Experiment: my_prompt_experiment
-Status: FAIL  (2 errors, 1 warning)
+Status: FAIL  (2 errors)
 
-🔴 [UNDERPOWERED_CI] Your sample size (n=47) gives a CI half-width of
-   ±0.071 (±7.1%), not the ±0.050 you may be implying by reporting to
-   two decimal places.
-   → To achieve ±5% precision, you need n≥196.
+🔴 [SAMPLE_TOO_SMALL] Sample size n=28 is below the absolute minimum (30).
+   No metric is meaningful at this scale.
+   → Collect at least 30 examples. For useful accuracy estimates, aim for N≥200.
 
-🔴 [MULTIPLE_TESTING_UNCORRECTED] 2 comparison(s) appear significant
-   without FDR correction but are NOT significant after Benjamini-Hochberg
-   correction. Reporting uncorrected results would be misleading.
-   → Report only BH-adjusted p-values.
-
-🟡 [CLASS_IMBALANCE] Your test set is 82% class 'correct'. Accuracy is
-   inflated relative to minority-class performance.
-   → Report macro-F1 alongside accuracy.
+🔴 [SEVERE_CLASS_IMBALANCE] Your test set is 93% class 'positive'.
+   A trivial model predicting the majority class achieves 93% accuracy.
+   Accuracy is a meaningless metric here.
+   → Report balanced accuracy, macro-F1, or AUC instead of accuracy.
 ```
 
 | Feature | evalkit | lm-eval-harness | DeepEval | RAGAS | LangSmith |
 |---------|:-------:|:---------------:|:--------:|:-----:|:---------:|
-| Bootstrap CI on every metric | ✅ | ❌ | ❌ | ❌ | ❌ |
-| McNemar's test for model comparison | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Bootstrap CI on every metric (automatic, always-on) | ✅ | Opt-in¹ | ❌ | ❌ | ❌ |
+| Paired significance test (McNemar / Wilcoxon) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | BH-FDR correction for prompt variants | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Pre-flight power analysis | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Automated statistical audit | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Inter-rater agreement (κ, α) | ✅ | ❌ | Partial | ❌ | ❌ |
-| Direct model comparison (.compare()) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Works offline / no vendor dependency | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Pre-flight power analysis (before spending budget) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Automated non-optional statistical audit | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Inter-rater agreement validation (κ, α) | ✅ | ❌ | Partial | ❌ | ❌ |
+| CI-gated comparison (.compare() with required N) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Works offline / no vendor lock-in | ✅ | ✅ | ✅ | ✅ | ❌ |
+
+¹ lm-evaluation-harness supports bootstrap resampling via `--bootstrap_iters` but it is opt-in, applied only to aggregate task scores (not individual metrics), and produces no power analysis, significance tests, or audit trail. evalkit's CIs are automatic on every `MetricResult` and cannot be turned off.
+
+*Verified May 2026 against lm-evaluation-harness 0.4.x, DeepEval 1.x, RAGAS 0.2.x, LangSmith. If any framework has added these features since, please open an issue.*
 
 ---
 
 ## Quickstart
+
+### Try it right now (60 seconds, no API key)
+
+```bash
+git clone https://github.com/bonnie-mcconnell/evalkit
+cd evalkit
+pip install -e .                              # core install, no extras needed for mock
+evalkit run examples/data/balanced_demo.jsonl --model mock --template "{{ text }}" --ref-field label
+evalkit table
+```
+
+You'll see a results table with 95% bootstrap CIs and a RigorChecker audit.
+For real model evaluation, see the OpenAI and Anthropic sections below.
+
+### Using a real model (OpenAI)
+
+```bash
+pip install "evalkit-research[openai]"
+export OPENAI_API_KEY=sk-...
+
+# Validate a factual QA dataset (~$0.01, 50 examples, ~20 seconds)
+evalkit run examples/data/factual_qa_50.jsonl \
+  --model gpt-4o-mini \
+  --template "Answer in one word or short phrase: {{ question }}" \
+  --ref-field answer \
+  --judge contains
+
+# Or run the full Python quickstart with error analysis and HTML report
+python examples/openai_quickstart.py --output report.html
+```
+
+What to expect when you run it:
+
+- **Accuracy** roughly 88–96% with a wide CI (±10–14pp at n=50) - the wide CI is
+  correct behaviour, not a bug. 50 examples is not enough for a precise measurement.
+- **RigorChecker** will warn about CI precision. It will tell you exactly how many
+  more examples you need.
+- **Cost** under $0.01 total.
+- **Time** approximately 15–30 seconds.
+
+`evalkit power 0.05 --test ci` shows the required N for any target precision.
+
+### Using a real model (Anthropic)
+
+```bash
+pip install "evalkit-research[anthropic]"
+export ANTHROPIC_API_KEY=sk-ant-...
+
+evalkit run examples/data/factual_qa_50.jsonl \
+  --model claude-haiku-4-5 \
+  --template "Answer in one word or short phrase: {{ question }}" \
+  --ref-field answer \
+  --judge contains
+```
+
+### Your own data
+
+Format your data as JSONL (one JSON object per line):
+
+```jsonl
+{"id": "q1", "question": "What is the capital of France?", "label": "Paris"}
+{"id": "q2", "question": "What year did WWII end?", "label": "1945"}
+```
+
+Then run:
+
+```bash
+evalkit run my_data.jsonl \
+  --model gpt-4o-mini \
+  --template "{{ question }}" \
+  --ref-field label \
+  --judge contains
+```
+
+See [examples/data/README.md](examples/data/README.md) for the full JSONL format
+specification, judge selection guide, and common mistakes.
+
+---
 
 ### Step 0: figure out how many examples you need
 
@@ -90,7 +198,7 @@ cmp = pa.for_proportion_difference(effect_size=0.05)
 print(f"Detect 5pp difference: need n ≥ {cmp.minimum_n}")  # → n ≥ 1,251
 ```
 
-Or get the full planning table - screenshot this and put it in your design doc:
+Or get the full planning table:
 
 ```python
 from evalkit import PowerAnalysis
@@ -132,14 +240,39 @@ Template validation catches field-name typos before you've made a single API cal
 
 ### Step 2: run the evaluation
 
+> **Note:** On balanced data where the model makes errors uniformly across classes,
+> `BalancedAccuracy` and `F1Score` equal `Accuracy` - this is correct, not a bug.
+> They diverge on **imbalanced data or when the model has class-biased errors**.
+> The `underpowered_imbalanced_demo.jsonl` dataset demonstrates this clearly.
+
 ```python
-from evalkit import EvalDataset, PromptTemplate, ExactMatchJudge, MockRunner, Experiment
+from evalkit import (
+    EvalDataset, PromptTemplate, ExactMatchJudge, MockRunner, Experiment,
+    BalancedAccuracy, F1Score, PrecisionScore, RecallScore,
+    PreFlightError,
+)
 
 dataset = EvalDataset.from_jsonl("my_data.jsonl")
 template = PromptTemplate("Answer concisely: {{ question }}")
 runner = MockRunner(judge=ExactMatchJudge(), template=template)
 
-result = Experiment("my_eval", dataset, runner).run()
+# strict=True (default): pre-flight ERRORs raise PreFlightError before any
+# API calls are made - no budget is spent on a broken experiment design.
+# Set strict=False to run anyway and rely on the post-hoc audit instead.
+try:
+    result = Experiment(
+        "my_eval", dataset, runner,
+        additional_metrics=[
+            BalancedAccuracy(),
+            F1Score(average="macro"),
+            PrecisionScore(average="macro"),
+            RecallScore(average="macro"),
+        ],
+    ).run()
+except PreFlightError as e:
+    print(e.audit)      # full RigorChecker report
+    raise               # or fix the issue and re-run
+
 result.print_summary()
 ```
 
@@ -152,9 +285,37 @@ Model:   mock-model-v1
 Cost:    $0.0000 | Tokens: 0 | Time: 0.8s
 
 Metrics (with 95% bootstrap CIs):
-  Accuracy: 0.8230 (95% CI: 0.8010–0.8440, n=1000)
+  Accuracy: 0.8230 (95% CI: 0.7990–0.8470, n=1000)
+  BalancedAccuracy: 0.8230 (95% CI: 0.7990–0.8460, n=1000)
+  F1Score(macro): 0.8229 (95% CI: 0.7989–0.8459, n=1000)
+  Precision(macro): 0.8236 (95% CI: 0.8000–0.8467, n=1000)
+  Recall(macro): 0.8230 (95% CI: 0.7990–0.8460, n=1000)
 
 ✅ RigorChecker: No issues found. Experiment appears statistically sound.
+```
+
+### Step 2b: save results and generate a tearsheet
+
+```python
+# Save to JSON - load later for comparisons or CI pipelines
+result.save("results/my_eval.json")
+
+# Generate a self-contained HTML tearsheet (no external deps)
+# Includes: metrics table with CI bars, RigorChecker audit findings,
+# error analysis (up to 10 worst examples with output vs expected), and run details.
+result.generate_report("results/my_eval.html")
+
+# Or get the HTML string directly (e.g. to embed in a notebook)
+html = result.generate_report()
+
+# Save a comparison result (useful for PR attachments)
+comparison = result_a.compare(result_b)
+comparison.save("results/comparison.json")
+
+# Commit your train/test split to disk so it never changes
+train, test = dataset.split(test_size=0.2, stratify=True)
+train.to_jsonl("data/train.jsonl")
+test.to_jsonl("data/test.jsonl")
 ```
 
 ### Step 3: compare models correctly
@@ -169,10 +330,10 @@ print(comparison)
 
 ```
 Comparison: gpt-4o vs gpt-4o-mini
-  gpt-4o:      accuracy = 0.8400
-  gpt-4o-mini: accuracy = 0.7200
-  McNemar: stat=9.08, p=0.0026, effect=2.71 → REJECT H₀ (α=0.05)
-  ✓ gpt-4o is statistically better (p=0.0026)
+  gpt-4o:      accuracy = 0.8460
+  gpt-4o-mini: accuracy = 0.7140
+  McNemar: stat=24.28, p=0.0000, effect=2.21 → REJECT H₀ (α=0.05)
+  ✓ gpt-4o is statistically better (p=0.0000)
 ```
 
 `compare()` auto-selects McNemar's test for binary outcomes (exact match) or Wilcoxon signed-rank for continuous scores (LLM judge). It verifies both result sets contain the same examples in the same order before running - misaligned paired tests are the most common error in LLM model comparison.
@@ -255,10 +416,15 @@ dataset = EvalDataset.from_list(records, reference_field="label")
 ## CLI
 
 ```bash
-# Evaluate with exact-match judge
+# Evaluate with exact-match judge (output must exactly equal label)
 evalkit run data.jsonl --model gpt-4o-mini \
   --template "Q: {{ question }}" \
   --output report.html
+
+# Evaluate with contains judge (output must contain the label string)
+evalkit run data.jsonl --model gpt-4o-mini \
+  --judge contains \
+  --template "Q: {{ question }}"
 
 # Evaluate with LLM-as-judge (same model scores the responses)
 evalkit run data.jsonl --model gpt-4o-mini \
@@ -299,6 +465,70 @@ docker compose up api
 
 Endpoints: `POST /runs`, `GET /runs/{id}`, `GET /runs/{id}/report`, `POST /compare`, `POST /power`, `GET /health`. Results are written to `./results/` and persist across restarts.
 
+> **Note:** The REST API currently supports `MockRunner` only - it is designed for integration testing and CI pipelines. For production evaluations with real model providers (OpenAI, Anthropic), use the Python API or CLI directly. Real provider support in the REST API is tracked in the [GitHub issues](https://github.com/bonnie-mcconnell/evalkit/issues).
+
+---
+
+## Using evalkit in CI pipelines
+
+evalkit is designed to gate model deployments on statistical quality. Two flags make this work:
+
+**`evalkit run --fail-on-errors`** - exits with code 1 if the RigorChecker audit finds ERROR-level findings (underpowered sample, severe class imbalance, uncorrected multiple testing). Use this to block a deployment when your eval data is too small to trust.
+
+**`evalkit compare --fail-on-regression`** - exits with code 2 if the new model is statistically significantly *worse* than the baseline. Exit 0 means no significant difference or the new model is better. Use this to block a deployment when the new model regresses.
+
+**`evalkit compare --format json`** - machine-readable output for scripting: `jq .reject_null`, `jq .b_is_significantly_worse`, `jq .p_value`.
+
+Example GitHub Actions workflow:
+
+```yaml
+# .github/workflows/eval.yml
+name: Eval gate
+
+on:
+  pull_request:
+    paths: ["prompts/**", "models/**"]
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+> **For the technical details:** every statistical choice in evalkit - why percentile bootstrap over BCa, why McNemar's over a paired t-test, why BH-FDR over Bonferroni, why stratified bootstrap on imbalanced data - is documented with full derivations and design rationale in **[docs/statistical_methods.md](docs/statistical_methods.md)**. This is the document to read before an interview.
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install evalkit
+The README will be updated with real output numbers after live validation.
+        run: pip install "evalkit-research[openai]"
+
+      - name: Run eval on baseline (main branch result cached)
+        run: |
+          evalkit run data/eval.jsonl \
+            --model gpt-4o-mini \
+            --template "{{ question }}" \
+            --save-results baseline.json \
+            --fail-on-errors          # block if sample is too small to trust
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Run eval on new model/prompt
+        run: |
+          evalkit run data/eval.jsonl \
+            --model gpt-4o-mini \
+            --template "{{ question }} Think step by step." \
+            --save-results new_model.json \
+            --fail-on-errors
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Compare - block if new model regresses
+        run: |
+          evalkit compare baseline.json new_model.json \
+            --fail-on-regression      # exit 2 if new model is significantly worse
+          # exit 0 = no regression detected (safe to deploy)
+```
+
+The `--fail-on-errors` flag catches the most common mistake in LLM eval CI pipelines: running a comparison on a dataset that is too small to detect meaningful differences, and treating a non-significant result as evidence of equivalence.
+
 ---
 
 ## Architecture
@@ -310,6 +540,8 @@ The thing I spent the most time on was making sure the statistical methods could
 **Execution layer** (`Judge`, `AsyncRunner`, `MockRunner`): `MockRunner` sits at the runner level rather than the provider level because "correct" is only meaningful relative to the reference answer, which the provider layer doesn't have access to. `AsyncRunner` writes checkpoints atomically (write-to-temp-then-rename) so a killed process never leaves a corrupt checkpoint. Synchronous provider calls run in a thread pool via `run_in_executor` to avoid blocking the event loop.
 
 **Analysis layer** (`Metric`, `RigorChecker`): The bootstrap is implemented once in `Metric.bootstrap_ci` and called by every subclass via `_point_estimate`. Stratified bootstrap samples within each class separately so all classes appear in every resample - on an imbalanced dataset, unstratified resampling sometimes produces zero examples of the minority class, making CIs artificially narrow. The `RigorChecker` clamps accuracy to the open interval (0, 1) before running power calculations - accuracy of exactly 0 or 1 makes the variance term p*(1-p) degenerate to zero, producing a misleading "adequately powered" result.
+
+The inner bootstrap loop calls `_prf_scores` - a pure-numpy precision/recall/F1 implementation - rather than `sklearn.metrics`. sklearn adds ~2.6ms of Python overhead per call (input validation, type coercion, format dispatch). At 10,000 resamples that totals ~26 seconds. The numpy path runs in ~0.1ms per call, a 20× speedup that makes the default `n_resamples=10_000` practical: the full default bootstrap completes in under 200ms on n=1,000 examples. The benchmark is in `evalkit/metrics/accuracy.py` at the `_prf_scores` docstring.
 
 **Interface layer** (Python API, CLI, REST API): Three interfaces over the same objects. The CLI uses lazy imports for fast startup - `evalkit version` doesn't load scipy. `evalkit run --format json` produces pipeable output for scripting.
 
@@ -360,6 +592,7 @@ pip install "evalkit-research[generation]"      # + BLEU / ROUGE
 pip install "evalkit-research[agreement]"       # + Krippendorff's alpha
 pip install "evalkit-research[huggingface]"     # + HuggingFace Datasets
 pip install "evalkit-research[dataframe]"       # + pandas (to_dataframe())
+pip install "evalkit-research[semantic]"        # + SemanticSimilarityJudge (sentence-transformers)
 pip install "evalkit-research[all]"             # everything
 ```
 
@@ -369,24 +602,46 @@ Requires Python 3.11+. Fully typed (`py.typed` marker, mypy strict).
 
 ## Running the demo
 
+### With a real API key (recommended first step)
+
 ```bash
 git clone https://github.com/bonnie-mcconnell/evalkit
 cd evalkit
+pip install -e ".[openai]"
+export OPENAI_API_KEY=sk-...
+python examples/openai_quickstart.py
+```
+
+Runs 50 factual QA questions against `gpt-4o-mini`, produces bootstrap CIs, a
+RigorChecker audit, cost summary, and error analysis. Total cost under $0.02.
+See `examples/openai_quickstart.py` for full documentation and `--output report.html`
+to generate an HTML tearsheet.
+
+### Mock demos (no API key)
+
+```bash
 pip install -e ".[dev]"
 python examples/full_workflow.py
 ```
 
-This runs the complete pipeline - power analysis, evaluation, model comparison, FDR correction, judge validation, RigorChecker audit, HTML tearsheet, error analysis, dataset splitting, template validation - using a mock model with no API keys.
+Runs the complete pipeline - power analysis, evaluation, model comparison, FDR
+correction, judge validation, RigorChecker audit, HTML tearsheet, error analysis,
+dataset splitting, template validation - using a mock model.
 
----
+```bash
+python examples/benchmark_audit.py
+```
 
-## What I'd do differently
+Audits the five most common evaluation failure modes: underpowered measurements
+(n=50, ±12pp CI), class imbalance inflation, multiple testing false positives
+(3 variants look significant → 0 survive FDR), low judge agreement (κ=0.41),
+and a well-designed passing experiment - all in one run.
 
-The `Experiment._compute_metrics` method only computes accuracy by default. For real use you almost always want F1 or BalancedAccuracy too, especially on imbalanced datasets. I'd make those the default rather than opt-in. (As of v0.2.0, `additional_metrics` now correctly passes `outputs` and `references` to each metric, so `BalancedAccuracy()` and `F1Score()` work properly via that parameter.)
+Or open the **interactive notebook** in your browser - no install required:
 
-The REST API only supports `MockRunner`. Adding real provider support would require API key management in the API layer, which I deliberately deferred - the security surface is non-trivial and the CLI already handles real providers well.
+[![Open in Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/bonnie-mcconnell/evalkit/main?urlpath=lab/tree/examples/walkthrough.ipynb)
 
-The checkpoint format serialises references as `str(reference)`, losing type information across restarts. A proper implementation would use a typed schema. Judges that call `str()` on the reference are safe; others are not.
+The notebook walks through the same pipeline step-by-step with explanations and live output.
 
 ---
 
@@ -401,4 +656,4 @@ The checkpoint format serialises references as `str(reference)`, losing type inf
 
 ---
 
-MIT License · [Changelog](CHANGELOG.md) · [Statistical methods](docs/statistical_methods.md) · [Cite](CITATION.cff) · [Security](SECURITY.md)
+MIT License · [Changelog](CHANGELOG.md) · [Statistical methods](docs/statistical_methods.md) · [Design decisions](docs/design_decisions.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
