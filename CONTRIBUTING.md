@@ -13,6 +13,7 @@ Verify everything works before making changes:
 ```bash
 pytest          # fast - no coverage overhead
 python examples/full_workflow.py
+python examples/benchmark_audit.py
 ```
 
 ## Running the tests
@@ -22,7 +23,7 @@ python examples/full_workflow.py
 pytest
 
 # Full suite with coverage (what CI runs - slower)
-pytest --cov=evalkit --cov-fail-under=85
+pytest --cov=evalkit --cov-fail-under=100
 
 # Skip slow bootstrap tests during quick iteration
 pytest -m "not slow"
@@ -79,7 +80,7 @@ class TopKAccuracy(Metric):
 ## Adding a new judge
 
 1. Subclass `DeterministicJudge` or `StochasticJudge` from `evalkit.core.judge`.
-   Both are importable directly from `evalkit` as of v0.1.0.
+   Both are importable directly from `evalkit`.
 2. Implement `judge(output, reference) -> JudgmentResult`.
 3. Return `JudgmentResult(score=..., is_correct=..., raw_output=output)`.
    `score` must be in [0, 1]. `is_correct` is the binary correctness flag.
@@ -117,11 +118,12 @@ class ContainsJudge(DeterministicJudge):
 - [ ] `mypy evalkit/` reports no errors (strict mode)
 - [ ] `ruff check evalkit/ tests/ examples/` passes
 - [ ] `ruff format --check evalkit/ tests/ examples/` passes
-- [ ] Coverage remains ≥ 85% (`pytest --cov=evalkit --cov-fail-under=85`)
+- [ ] Coverage remains 100% (`pytest --cov=evalkit --cov-fail-under=100`)
 - [ ] New public API is exported from `evalkit/__init__.py` and the appropriate sub-`__init__.py`
 - [ ] Statistical methods have a reference comment (author, year, paper/book name)
 - [ ] No bare floats returned from metric functions - always `MetricResult`
 - [ ] `python examples/full_workflow.py` runs end-to-end without error
+- [ ] `python examples/benchmark_audit.py` runs end-to-end without error
 
 ## Statistical methods: what we use and why
 

@@ -33,6 +33,16 @@ check: lint typecheck
 demo:
 	python examples/full_workflow.py
 
+## Run the benchmark audit (5 real-world failure-mode demonstrations)
+audit:
+	python examples/benchmark_audit.py
+
+## Execute the walkthrough notebook and update its stored outputs
+notebook:
+	jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=120 \
+		--output examples/walkthrough.ipynb examples/walkthrough.ipynb
+	@echo "Notebook executed and outputs saved."
+
 ## Remove build artifacts and caches
 clean:
 	rm -rf dist/ build/ *.egg-info .pytest_cache .mypy_cache .ruff_cache htmlcov coverage.xml

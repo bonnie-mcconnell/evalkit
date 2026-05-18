@@ -3,9 +3,9 @@ services:
     build: .
     ports:
       - "8000:8000"
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    # Note: the REST API currently supports MockRunner only.
+    # Real provider support (OpenAI, Anthropic) is via the CLI or Python API.
+    # See README for details.
     volumes:
       # Results, reports, and checkpoints are written to ./results/ inside the container
       - ./results:/app/results

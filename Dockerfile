@@ -1,3 +1,6 @@
+# evalkit REST API container.
+# Scope: supports MockRunner only (no real LLM provider calls).
+# For real providers (OpenAI, Anthropic), use the CLI or Python API directly.
 FROM python:3.11-slim
 
 WORKDIR /app
